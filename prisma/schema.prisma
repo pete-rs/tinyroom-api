@@ -1,0 +1,136 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id          String   @id @default(uuid())
+  auth0Id     String   @unique @map("auth0_id")
+  email       String   @unique
+  username    String   @unique
+  firstName   String   @map("first_name")
+  dateOfBirth DateTime @map("date_of_birth")
+  avatarUrl   String?  @map("avatar_url") // User profile avatar image URL
+  createdAt   DateTime @default(now()) @map("created_at")
+  oneSignalPlayerId String? @map("onesignal_player_id") // OneSignal player ID for push notifications
+  
+  createdRooms    Room[]
+  roomParticipants RoomParticipant[]
+  elements           Element[]
+  messages           Message[]
+  messageReactions   MessageReaction[]
+  messageReads       MessageRead[]
+  
+  @@map("users")
+}
+
+model Room {
+  id           String   @id @default(uuid())
+  name         String   // Required room name
+  snapshotUrl  String?  @map("snapshot_url") // Visual snapshot/thumbnail of the room
+  createdBy    String   @map("created_by")
+  creator      User     @relation(fields: [createdBy], references: [id])
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at") // Track when room is updated
+  isActive     Boolean  @default(true) @map("is_active")
+  
+  participants RoomParticipant[]
+  elements     Element[]
+  messages     Message[]
+  
+  @@map("rooms")
+}
+
+model RoomParticipant {
+  roomId         String    @map("room_id")
+  userId         String    @map("user_id")
+  room           Room      @relation(fields: [roomId], references: [id])
+  user           User      @relation(fields: [userId], references: [id])
+  joinedAt       DateTime  @default(now()) @map("joined_at")
+  leftAt         DateTime? @map("left_at") // Track when user left
+  lastVisitedAt  DateTime  @default(now()) @map("last_visited_at") // Track when user last visited room
+  lastReadAt     DateTime  @default(now()) @map("last_read_at") // Track when user last read messages
+  color          String    // Hex color for touch circle
+  isActive       Boolean   @default(true) @map("is_active")
+  
+  @@id([roomId, userId])
+  @@map("room_participants")
+}
+
+model Element {
+  id         String    @id @default(uuid())
+  roomId     String    @map("room_id")
+  room       Room      @relation(fields: [roomId], references: [id])
+  type       ElementType
+  createdBy  String    @map("created_by")
+  creator    User      @relation(fields: [createdBy], references: [id])
+  positionX  Float     @map("position_x")
+  positionY  Float     @map("position_y")
+  content    String?   // For notes and horoscopes
+  imageUrl   String?   @map("image_url") // For photos
+  audioUrl   String?   @map("audio_url") // For audio/voice notes
+  videoUrl   String?   @map("video_url") // For videos
+  thumbnailUrl String? @map("thumbnail_url") // For video thumbnails
+  duration   Float?    // Audio/video duration in seconds
+  width      Float
+  height     Float
+  createdAt  DateTime  @default(now()) @map("created_at")
+  updatedAt  DateTime  @updatedAt @map("updated_at")
+  deletedAt  DateTime? @map("deleted_at")
+  
+  @@map("elements")
+}
+
+enum ElementType {
+  NOTE
+  PHOTO
+  AUDIO
+  HOROSCOPE
+  VIDEO
+  LINK
+}
+
+model Message {
+  id         String    @id @default(uuid())
+  roomId     String    @map("room_id")
+  room       Room      @relation(fields: [roomId], references: [id])
+  senderId   String    @map("sender_id")
+  sender     User      @relation(fields: [senderId], references: [id])
+  text       String    @db.Text // Allow longer messages
+  createdAt  DateTime  @default(now()) @map("created_at")
+  updatedAt  DateTime  @updatedAt @map("updated_at")
+  deletedAt  DateTime? @map("deleted_at") // Soft delete
+  
+  reactions  MessageReaction[]
+  readBy     MessageRead[]
+  
+  @@index([roomId, createdAt]) // For efficient pagination
+  @@map("messages")
+}
+
+model MessageReaction {
+  messageId  String   @map("message_id")
+  message    Message  @relation(fields: [messageId], references: [id])
+  userId     String   @map("user_id")
+  user       User     @relation(fields: [userId], references: [id])
+  createdAt  DateTime @default(now()) @map("created_at")
+  
+  @@id([messageId, userId]) // One reaction per user per message
+  @@map("message_reactions")
+}
+
+model MessageRead {
+  messageId  String   @map("message_id")
+  message    Message  @relation(fields: [messageId], references: [id])
+  userId     String   @map("user_id")
+  user       User     @relation(fields: [userId], references: [id])
+  readAt     DateTime @default(now()) @map("read_at")
+  
+  @@id([messageId, userId])
+  @@index([messageId]) // For efficient read receipt queries
+  @@map("message_reads")
+}
