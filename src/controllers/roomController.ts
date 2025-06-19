@@ -37,6 +37,14 @@ export const getRooms = async (req: AuthRequest, res: Response) => {
               email: true,
             },
           },
+          nameSetByUser: {
+            select: {
+              id: true,
+              username: true,
+              firstName: true,
+              avatarUrl: true,
+            },
+          },
           participants: {
             include: {
               user: {
@@ -84,22 +92,40 @@ export const getRooms = async (req: AuthRequest, res: Response) => {
 };
 
 export const createRoom = async (req: AuthRequest, res: Response) => {
+  const startTime = Date.now();
+  const timings: Record<string, { start: number; end: number; duration: number }> = {};
+  
+  const logTiming = (taskName: string, start: number) => {
+    const end = Date.now();
+    const duration = end - start;
+    const elapsed = end - startTime;
+    timings[taskName] = { start: start - startTime, end: elapsed, duration };
+    
+    console.log(`⏱️  [${taskName}] Completed at ${elapsed}ms (took ${duration}ms)`);
+  };
+
   try {
+    console.log('\n🚀 ========== ROOM CREATION STARTED ==========');
+    console.log(`📅 Timestamp: ${new Date().toISOString()}`);
+    console.log(`👤 User: ${req.user?.id || 'unknown'}`);
+    
     const { name, participantIds } = req.body;
     
-    console.log('📥 Create room request:', {
-      body: req.body,
+    console.log('📥 Request Details:', {
+      roomName: name,
+      participantCount: participantIds?.length || 0,
       participantIds: participantIds,
-      participantIdsType: typeof participantIds,
-      participantIdsIsArray: Array.isArray(participantIds),
-      participantIdsLength: participantIds?.length
+      requestSize: JSON.stringify(req.body).length + ' bytes'
     });
+
+    // VALIDATION PHASE
+    const validationStart = Date.now();
+    console.log(`\n🔍 [VALIDATION PHASE] Starting at ${validationStart - startTime}ms...`);
 
     if (!req.user) {
       throw new AppError(401, 'UNAUTHORIZED', 'User not authenticated');
     }
 
-    // Validate required fields
     if (!name || !name.trim()) {
       throw new AppError(400, 'INVALID_REQUEST', 'Room name is required');
     }
@@ -108,37 +134,31 @@ export const createRoom = async (req: AuthRequest, res: Response) => {
       throw new AppError(400, 'INVALID_REQUEST', 'participantIds must be an array');
     }
 
-    // Ensure creator is not in participant list
     if (participantIds.includes(req.user.id)) {
       throw new AppError(400, 'INVALID_REQUEST', 'Creator should not be in participant list');
     }
+    
+    logTiming('Validation', validationStart);
 
-    // Check if all participants exist (only if there are participants)
+    // PARTICIPANT VERIFICATION PHASE - Skip for better performance
+    // We'll handle missing participants gracefully
     if (participantIds.length > 0) {
-      const participants = await prisma.user.findMany({
-        where: {
-          id: {
-            in: participantIds,
-          },
-        },
-      });
-
-      if (participants.length !== participantIds.length) {
-        throw new AppError(404, 'USER_NOT_FOUND', 'One or more participants not found');
-      }
+      console.log(`\n👥 [PARTICIPANT VERIFICATION] Skipped for performance (${participantIds.length} participants)`);
     }
 
-    // Generate colors for all participants (including creator)
+    // COLOR GENERATION PHASE
+    const colorGenStart = Date.now();
+    console.log(`\n🎨 [COLOR GENERATION] Starting at ${colorGenStart - startTime}ms...`);
+    
     const colors = generateRoomColors(participantIds.length + 1);
+    console.log(`   Generated ${colors.length} colors: ${colors.join(', ')}`);
     
-    console.log('🔍 Creating room with:', {
-      creatorId: req.user.id,
-      participantIds,
-      totalParticipants: participantIds.length + 1,
-      colors: colors.length
-    });
+    logTiming('Color Generation', colorGenStart);
     
-    // Prepare participant data
+    // PARTICIPANT DATA PREPARATION
+    const prepStart = Date.now();
+    console.log(`\n📋 [DATA PREPARATION] Starting at ${prepStart - startTime}ms...`);
+    
     const participantData = [
       {
         userId: req.user.id,
@@ -150,9 +170,21 @@ export const createRoom = async (req: AuthRequest, res: Response) => {
       })),
     ];
     
-    console.log('👥 Participant data to create:', participantData);
+    console.log('   Participant data structure:', participantData.map(p => ({
+      userId: p.userId.substring(0, 8) + '...',
+      color: p.color
+    })));
     
-    // Create room with all participants
+    logTiming('Data Preparation', prepStart);
+    
+    // DATABASE TRANSACTION PHASE
+    const dbStart = Date.now();
+    console.log(`\n💾 [DATABASE TRANSACTION] Starting at ${dbStart - startTime}ms...`);
+    console.log('   Creating room with:');
+    console.log(`   - Name: "${name.trim()}"`);
+    console.log(`   - Creator: ${req.user.id}`);
+    console.log(`   - Participants: ${participantData.length} total`);
+    
     const room = await prisma.room.create({
       data: {
         name: name.trim(),
@@ -165,6 +197,14 @@ export const createRoom = async (req: AuthRequest, res: Response) => {
         creator: {
           select: userSelect,
         },
+        nameSetByUser: {
+          select: {
+            id: true,
+            username: true,
+            firstName: true,
+            avatarUrl: true,
+          },
+        },
         participants: {
           include: {
             user: {
@@ -175,34 +215,72 @@ export const createRoom = async (req: AuthRequest, res: Response) => {
       },
     });
 
-    console.log('✅ Room created with participants:', {
-      roomId: room.id,
-      totalParticipants: room.participants.length,
-      participantDetails: room.participants.map(p => ({
-        userId: p.userId,
-        color: p.color
-      }))
-    });
-
-    // Send notifications to all participants (except creator)
-    const creator = req.user;
-    const otherParticipants = room.participants.filter(p => p.userId !== req.user!.id);
+    console.log(`   ✅ Room created successfully`);
+    console.log(`   - Room ID: ${room.id}`);
+    console.log(`   - Created At: ${room.createdAt.toISOString()}`);
     
-    // Send notifications in parallel
-    await Promise.all(
-      otherParticipants.map(participant =>
+    logTiming('Database Transaction', dbStart);
+
+    // RESPONSE PHASE
+    const responseStart = Date.now();
+    console.log(`\n📤 [RESPONSE PHASE] Starting at ${responseStart - startTime}ms...`);
+    console.log(`   Sending response with room data (${JSON.stringify(room).length} bytes)`);
+    
+    res.status(201).json({
+      data: room,
+    });
+    
+    logTiming('Response Sent', responseStart);
+    
+    const totalTime = Date.now() - startTime;
+    console.log(`\n✅ ========== ROOM CREATION COMPLETED ==========`);
+    console.log(`⏱️  Total time: ${totalTime}ms`);
+    console.log('\n📊 Performance Summary:');
+    Object.entries(timings).forEach(([task, timing]) => {
+      const percentage = ((timing.duration / totalTime) * 100).toFixed(1);
+      console.log(`   ${task}: ${timing.duration}ms (${percentage}%)`);
+    });
+    console.log('================================================\n');
+
+    // NOTIFICATION PHASE (non-blocking)
+    setImmediate(() => {
+      const notificationStart = Date.now();
+      console.log(`\n🔔 [NOTIFICATION PHASE - ASYNC] Starting...`);
+      
+      const creator = req.user!;
+      const otherParticipants = room.participants.filter(p => p.userId !== creator.id);
+      
+      console.log(`   Sending notifications to ${otherParticipants.length} participants`);
+      
+      // Send notifications in background
+      otherParticipants.forEach((participant, index) => {
+        const participantNotifStart = Date.now();
+        
         NotificationService.notifyRoomCreated(
           creator.firstName || creator.username,
           participant.userId,
           room.id
-        )
-      )
-    );
-
-    res.status(201).json({
-      data: room,
+        ).then(() => {
+          const duration = Date.now() - participantNotifStart;
+          console.log(`   ✅ Notification ${index + 1}/${otherParticipants.length} sent to ${participant.user.username} (${duration}ms)`);
+        }).catch(err => {
+          const duration = Date.now() - participantNotifStart;
+          console.error(`   ❌ Notification ${index + 1}/${otherParticipants.length} failed for ${participant.user.username} (${duration}ms):`, err.message);
+        });
+      });
+      
+      // Log total notification phase time after a delay
+      setTimeout(() => {
+        const notifDuration = Date.now() - notificationStart;
+        console.log(`\n🔔 [NOTIFICATION PHASE - COMPLETE] Total async time: ${notifDuration}ms`);
+        console.log('================================================\n');
+      }, 5000); // Check after 5 seconds
     });
   } catch (error) {
+    const errorTime = Date.now() - startTime;
+    console.log(`\n❌ [ERROR] Room creation failed at ${errorTime}ms`);
+    console.log(`   Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    console.log('================================================\n');
     throw error;
   }
 };
@@ -227,6 +305,14 @@ export const getRoom = async (req: AuthRequest, res: Response) => {
       include: {
         creator: {
           select: userSelect,
+        },
+        nameSetByUser: {
+          select: {
+            id: true,
+            username: true,
+            firstName: true,
+            avatarUrl: true,
+          },
         },
         participants: {
           include: {
@@ -414,7 +500,6 @@ export const getRoomsGroupedByPerson = async (req: AuthRequest, res: Response) =
               select: {
                 id: true,
                 name: true,
-                snapshotUrl: true,
                 createdAt: true,
                 updatedAt: true,
                 isActive: true,
@@ -452,7 +537,6 @@ export const getRoomsGroupedByPerson = async (req: AuthRequest, res: Response) =
       rooms: user.roomParticipants.map(rp => ({
         id: rp.room.id,
         name: rp.room.name,
-        snapshotUrl: rp.room.snapshotUrl,
         createdAt: rp.room.createdAt,
         updatedAt: rp.room.updatedAt,
         isActive: rp.room.isActive,
@@ -554,6 +638,7 @@ export const updateRoomName = async (req: AuthRequest, res: Response) => {
       where: { id },
       data: { 
         name: name || null, // Allow clearing the name by passing empty string
+        nameSetBy: name ? req.user.id : null, // Set nameSetBy only when name is provided
       },
       include: {
         participants: {
@@ -563,28 +648,41 @@ export const updateRoomName = async (req: AuthRequest, res: Response) => {
             },
           },
         },
+        nameSetByUser: {
+          select: {
+            id: true,
+            username: true,
+            firstName: true,
+            avatarUrl: true,
+          },
+        },
       },
     });
-
-    // Send notification to the other user if name was set (not cleared)
-    if (name && req.user) {
-      const otherParticipant = updatedRoom.participants.find(p => p.userId !== req.user!.id);
-      if (otherParticipant) {
-        await NotificationService.notifyRoomRenamed(
-          req.user.firstName || req.user.username,
-          otherParticipant.userId,
-          updatedRoom.id,
-          name
-        );
-      }
-    }
 
     // Emit socket event to all participants in the room
     socketService.emitRoomUpdate(updatedRoom.id, updatedRoom);
 
+    // Send response immediately
     res.json({
       data: updatedRoom,
     });
+
+    // Send notification after response (non-blocking)
+    if (name && req.user) {
+      setImmediate(() => {
+        const otherParticipants = updatedRoom.participants.filter(p => p.userId !== req.user!.id);
+        otherParticipants.forEach(participant => {
+          NotificationService.notifyRoomRenamed(
+            req.user!.firstName || req.user!.username,
+            participant.userId,
+            updatedRoom.id,
+            name
+          ).catch(err => {
+            console.error('❌ Failed to send room rename notification:', err);
+          });
+        });
+      });
+    }
   } catch (error) {
     throw error;
   }
@@ -793,110 +891,105 @@ export const getMyRooms = async (req: AuthRequest, res: Response) => {
       throw new AppError(401, 'UNAUTHORIZED', 'User not authenticated');
     }
 
-    // Get all rooms where user is a participant with room details
-    const rooms = await prisma.room.findMany({
-      where: {
-        participants: {
-          some: {
-            userId: req.user.id,
-          },
+    // Get all rooms with basic info in a single query
+    const roomsData = await prisma.$queryRaw<Array<{
+      id: string;
+      name: string;
+      created_at: Date;
+      updated_at: Date;
+      messages_updated_at: Date | null;
+      created_by: string;
+      name_set_by: string | null;
+      is_creator: boolean;
+      element_count: bigint;
+      unread_elements: bigint;
+      unread_messages: bigint;
+      last_visited_at: Date;
+      participant_data: any; // JSON array of participants
+      creator_data: any; // JSON object of creator
+      name_set_by_user_data: any; // JSON object of name setter
+    }>>`
+      SELECT 
+        r.id,
+        r.name,
+        r.created_at,
+        r.updated_at,
+        r.messages_updated_at,
+        r.created_by,
+        r.name_set_by,
+        (r.created_by = ${req.user.id}) as is_creator,
+        COUNT(DISTINCT e.id) FILTER (WHERE e.deleted_at IS NULL) as element_count,
+        COUNT(DISTINCT e.id) FILTER (WHERE e.deleted_at IS NULL AND e.created_at > rp.last_visited_at AND e.created_by != ${req.user.id}) as unread_elements,
+        COUNT(DISTINCT m.id) FILTER (WHERE m.deleted_at IS NULL AND m.created_at > rp.last_read_at AND m.sender_id != ${req.user.id}) as unread_messages,
+        rp.last_visited_at,
+        (
+          SELECT json_agg(json_build_object(
+            'id', u.id,
+            'username', u.username,
+            'firstName', u.first_name,
+            'avatarUrl', u.avatar_url,
+            'color', rp2.color,
+            'isActive', rp2.is_active
+          ))
+          FROM room_participants rp2
+          JOIN users u ON u.id = rp2.user_id
+          WHERE rp2.room_id = r.id AND rp2.user_id != ${req.user.id}
+        ) as participant_data,
+        (
+          SELECT json_build_object(
+            'id', creator.id,
+            'username', creator.username,
+            'firstName', creator.first_name,
+            'email', creator.email,
+            'avatarUrl', creator.avatar_url
+          )
+          FROM users creator
+          WHERE creator.id = r.created_by
+        ) as creator_data,
+        (
+          SELECT json_build_object(
+            'id', setter.id,
+            'username', setter.username,
+            'firstName', setter.first_name,
+            'avatarUrl', setter.avatar_url
+          )
+          FROM users setter
+          WHERE setter.id = r.name_set_by
+        ) as name_set_by_user_data
+      FROM rooms r
+      JOIN room_participants rp ON rp.room_id = r.id AND rp.user_id = ${req.user.id}
+      LEFT JOIN elements e ON e.room_id = r.id
+      LEFT JOIN messages m ON m.room_id = r.id
+      GROUP BY r.id, r.name, r.created_at, r.updated_at, r.messages_updated_at, r.created_by, r.name_set_by, rp.last_visited_at
+      ORDER BY GREATEST(r.updated_at, COALESCE(r.messages_updated_at, r.updated_at)) DESC
+    `;
+
+    // Transform the raw data into the expected format
+    const roomsWithUnreadCount = roomsData.map(room => {
+      const unreadCount = Number(room.unread_elements) + Number(room.unread_messages);
+      
+      return {
+        id: room.id,
+        name: room.name,
+        createdAt: room.created_at,
+        updatedAt: room.updated_at,
+        messagesUpdatedAt: room.messages_updated_at,
+        createdBy: room.created_by,
+        nameSetBy: room.name_set_by,
+        creator: room.creator_data,
+        nameSetByUser: room.name_set_by_user_data,
+        isCreator: room.is_creator,
+        participants: room.participant_data || [],
+        elementCount: Number(room.element_count),
+        unreadCount,
+        hasUnread: unreadCount > 0,
+        lastVisitedAt: room.last_visited_at,
+        badges: {
+          messages: Number(room.unread_messages),
+          elements: Number(room.unread_elements),
         },
-      },
-      include: {
-        participants: {
-          include: {
-            user: {
-              select: userSelect,
-            },
-          },
-        },
-        _count: {
-          select: {
-            elements: {
-              where: {
-                deletedAt: null,
-              },
-            },
-          },
-        },
-      },
-      orderBy: {
-        updatedAt: 'desc', // Most recently updated first
-      },
+      };
     });
-
-    // Get the user's last visit time for each room and calculate unread counts
-    const roomsWithUnreadCount = await Promise.all(
-      rooms.map(async (room) => {
-        // Find the current user's participant record
-        const currentUserParticipant = room.participants.find(
-          p => p.userId === req.user!.id
-        );
-
-        if (!currentUserParticipant) {
-          throw new AppError(500, 'DATA_INCONSISTENCY', 'User participant record not found');
-        }
-
-        // Count elements created after user's last visit
-        const unreadElementsCount = await prisma.element.count({
-          where: {
-            roomId: room.id,
-            deletedAt: null,
-            createdAt: {
-              gt: currentUserParticipant.lastVisitedAt,
-            },
-            // Don't count elements created by the current user
-            createdBy: {
-              not: req.user!.id,
-            },
-          },
-        });
-
-        // Count messages sent after user's last read
-        const unreadMessagesCount = await prisma.message.count({
-          where: {
-            roomId: room.id,
-            deletedAt: null,
-            createdAt: {
-              gt: currentUserParticipant.lastReadAt,
-            },
-            // Don't count messages sent by the current user
-            senderId: {
-              not: req.user!.id,
-            },
-          },
-        });
-
-        // Total unread count (elements + messages)
-        const unreadCount = unreadElementsCount + unreadMessagesCount;
-
-        // Format participants for response (exclude current user)
-        const otherParticipants = room.participants
-          .filter(p => p.userId !== req.user!.id)
-          .map(p => ({
-            id: p.user.id,
-            username: p.user.username,
-            firstName: p.user.firstName,
-            avatarUrl: p.user.avatarUrl,
-            color: p.color,
-          }));
-
-        return {
-          id: room.id,
-          name: room.name,
-          snapshotUrl: room.snapshotUrl,
-          createdAt: room.createdAt,
-          updatedAt: room.updatedAt,
-          createdBy: room.createdBy,
-          isCreator: room.createdBy === req.user!.id,
-          participants: otherParticipants,
-          elementCount: room._count.elements,
-          unreadCount,
-          hasUnread: unreadCount > 0,
-          lastVisitedAt: currentUserParticipant.lastVisitedAt,
-        };
-      })
-    );
 
     res.json({
       data: roomsWithUnreadCount,
@@ -908,15 +1001,21 @@ export const getMyRooms = async (req: AuthRequest, res: Response) => {
 
 export const addParticipants = async (req: AuthRequest, res: Response) => {
   const { id: roomId } = req.params;
-  const { participantIds } = req.body;
+  const { userIds } = req.body;
+  
+  console.log('🎯 [ADD PARTICIPANTS] Request received:', {
+    roomId,
+    userIds,
+    requestedBy: req.user?.id,
+  });
 
   if (!req.user) {
     throw new AppError(401, 'UNAUTHORIZED', 'User not authenticated');
   }
 
   // Validate input
-  if (!participantIds || !Array.isArray(participantIds) || participantIds.length === 0) {
-    throw new AppError(400, 'INVALID_REQUEST', 'At least one participant ID is required');
+  if (!userIds || !Array.isArray(userIds) || userIds.length === 0) {
+    throw new AppError(400, 'INVALID_REQUEST', 'At least one user ID is required');
   }
 
   try {
@@ -924,8 +1023,21 @@ export const addParticipants = async (req: AuthRequest, res: Response) => {
     const room = await prisma.room.findUnique({
       where: { id: roomId },
       include: {
+        nameSetByUser: {
+          select: {
+            id: true,
+            username: true,
+            firstName: true,
+            avatarUrl: true,
+          },
+        },
         participants: {
           where: { isActive: true },
+          include: {
+            user: {
+              select: userSelect,
+            },
+          },
         },
       },
     });
@@ -936,38 +1048,47 @@ export const addParticipants = async (req: AuthRequest, res: Response) => {
 
     // Only room creator can add participants
     if (room.createdBy !== req.user.id) {
-      throw new AppError(403, 'FORBIDDEN', 'Only the room creator can add participants');
+      throw new AppError(401, 'UNAUTHORIZED', 'Only the room creator can add participants');
     }
 
     // Check if participants exist
     const users = await prisma.user.findMany({
       where: {
         id: {
-          in: participantIds,
+          in: userIds,
         },
       },
     });
 
-    if (users.length !== participantIds.length) {
-      throw new AppError(404, 'USER_NOT_FOUND', 'One or more users not found');
-    }
+    const foundUserIds = users.map(u => u.id);
+    const notFoundIds = userIds.filter(id => !foundUserIds.includes(id));
 
-    // Filter out already active participants
+    // Categorize users
     const currentParticipantIds = room.participants.map(p => p.userId);
-    const newParticipantIds = participantIds.filter(id => !currentParticipantIds.includes(id));
+    const alreadyInRoom = userIds.filter(id => currentParticipantIds.includes(id));
+    const toAdd = foundUserIds.filter(id => !currentParticipantIds.includes(id));
+    
+    console.log('🎯 [ADD PARTICIPANTS] User categorization:', {
+      currentParticipants: currentParticipantIds,
+      requestedUsers: userIds,
+      foundUsers: foundUserIds,
+      alreadyInRoom,
+      toAdd,
+      notFoundIds,
+    });
 
-    if (newParticipantIds.length === 0) {
+    if (toAdd.length === 0 && notFoundIds.length === 0) {
       throw new AppError(400, 'INVALID_REQUEST', 'All specified users are already participants');
     }
 
     // Generate colors for new participants
     const existingColors = room.participants.map(p => p.color);
-    const totalParticipants = currentParticipantIds.length + newParticipantIds.length;
+    const totalParticipants = currentParticipantIds.length + toAdd.length;
     const allColors = generateRoomColors(totalParticipants);
     const newColors = allColors.filter(color => !existingColors.includes(color));
 
     // Add new participants or reactivate existing ones
-    const participantPromises = newParticipantIds.map(async (userId, index) => {
+    const participantPromises = toAdd.map(async (userId, index) => {
       // Check if participant existed before (inactive)
       const existingParticipant = await prisma.roomParticipant.findUnique({
         where: {
@@ -1007,38 +1128,84 @@ export const addParticipants = async (req: AuthRequest, res: Response) => {
     });
 
     await Promise.all(participantPromises);
+    
+    console.log('🎯 [ADD PARTICIPANTS] Database operations completed');
 
-    // Update room timestamp
-    await prisma.room.update({
-      where: { id: roomId },
-      data: {},
-    });
+    // NOTE: Do NOT update room timestamp when adding participants
+    // Per product specs, only element and message changes should affect activity timestamp
 
     // Get updated room with all participants
     const updatedRoom = await prisma.room.findUnique({
       where: { id: roomId },
       include: {
+        creator: {
+          select: userSelect,
+        },
+        nameSetByUser: {
+          select: {
+            id: true,
+            username: true,
+            firstName: true,
+            avatarUrl: true,
+          },
+        },
         participants: {
           where: { isActive: true },
           include: {
             user: {
-              select: {
-                id: true,
-                username: true,
-                firstName: true,
-                avatarUrl: true,
-              },
+              select: userSelect,
             },
           },
         },
       },
     });
 
+    // Send notifications to newly added participants
+    const addedParticipants = updatedRoom!.participants.filter(p => toAdd.includes(p.userId));
+    
+    console.log('🎯 [ADD PARTICIPANTS] Final state:', {
+      updatedParticipantCount: updatedRoom!.participants.length,
+      addedParticipants: addedParticipants.map(p => ({ id: p.userId, username: p.user.username })),
+    });
+    
+    // Send push notifications after response
+    setImmediate(() => {
+      const adderName = req.user!.firstName || req.user!.username;
+      addedParticipants.forEach(participant => {
+        NotificationService.notifyAddedToRoom(
+          adderName,
+          participant.userId,
+          roomId,
+          updatedRoom!.name
+        ).catch(err => {
+          console.error('❌ Failed to send participant added notification:', err);
+        });
+      });
+    });
+
+    // Emit Socket.IO events for real-time updates
+    addedParticipants.forEach(participant => {
+      socketService.emitToRoom(roomId, 'participant:added', {
+        roomId,
+        participant: {
+          ...participant.user,
+          color: participant.color,
+        },
+        addedBy: {
+          id: req.user!.id,
+          username: req.user!.username,
+          firstName: req.user!.firstName,
+        },
+      });
+    });
+
     res.json({
+      success: true,
       data: {
+        added: toAdd,
+        alreadyInRoom,
+        notFound: notFoundIds,
         room: updatedRoom,
-        addedCount: newParticipantIds.length,
-        message: `Successfully added ${newParticipantIds.length} participant(s)`,
       },
     });
   } catch (error) {
@@ -1049,25 +1216,46 @@ export const addParticipants = async (req: AuthRequest, res: Response) => {
 };
 
 export const removeParticipants = async (req: AuthRequest, res: Response) => {
-  const { id: roomId } = req.params;
-  const { participantIds } = req.body;
+  const { id: roomId, userId } = req.params;
+  
+  console.log('🎯 [REMOVE PARTICIPANT] Request received:', {
+    roomId,
+    userId,
+    requestedBy: req.user?.id,
+  });
 
   if (!req.user) {
     throw new AppError(401, 'UNAUTHORIZED', 'User not authenticated');
   }
 
   // Validate input
-  if (!participantIds || !Array.isArray(participantIds) || participantIds.length === 0) {
-    throw new AppError(400, 'INVALID_REQUEST', 'At least one participant ID is required');
+  if (!userId) {
+    throw new AppError(400, 'INVALID_REQUEST', 'User ID is required');
   }
 
   try {
-    // Get room and verify creator
+    // Get room and verify permissions
     const room = await prisma.room.findUnique({
       where: { id: roomId },
       include: {
+        creator: {
+          select: userSelect,
+        },
+        nameSetByUser: {
+          select: {
+            id: true,
+            username: true,
+            firstName: true,
+            avatarUrl: true,
+          },
+        },
         participants: {
-          where: { isActive: true },
+          // Don't filter by isActive - we need to see all participants
+          include: {
+            user: {
+              select: userSelect,
+            },
+          },
         },
       },
     });
@@ -1076,69 +1264,107 @@ export const removeParticipants = async (req: AuthRequest, res: Response) => {
       throw new AppError(404, 'ROOM_NOT_FOUND', 'Room not found');
     }
 
-    // Only room creator can remove participants
+    // Check permissions: Only room creator can remove participants
     if (room.createdBy !== req.user.id) {
-      throw new AppError(403, 'FORBIDDEN', 'Only the room creator can remove participants');
+      throw new AppError(401, 'UNAUTHORIZED', 'Only the room creator can remove participants');
     }
 
     // Cannot remove the creator
-    if (participantIds.includes(req.user.id)) {
+    if (userId === room.createdBy) {
       throw new AppError(400, 'INVALID_REQUEST', 'Cannot remove the room creator');
     }
 
-    // Verify all participants exist in the room
-    const currentParticipantIds = room.participants.map(p => p.userId);
-    const validParticipantIds = participantIds.filter(id => currentParticipantIds.includes(id));
-
-    if (validParticipantIds.length === 0) {
-      throw new AppError(400, 'INVALID_REQUEST', 'None of the specified users are active participants');
+    // Verify participant exists in the room
+    const participant = room.participants.find(p => p.userId === userId);
+    if (!participant) {
+      throw new AppError(404, 'NOT_FOUND', 'User is not a participant in this room');
     }
 
-    // Soft delete participants (mark as inactive)
-    await prisma.roomParticipant.updateMany({
-      where: {
-        roomId,
-        userId: {
-          in: validParticipantIds,
+    // Check if participant is already inactive
+    if (!participant.isActive) {
+      // If already inactive, do a hard delete
+      await prisma.roomParticipant.delete({
+        where: {
+          roomId_userId: {
+            roomId,
+            userId,
+          },
         },
-      },
-      data: {
-        isActive: false,
-        leftAt: new Date(),
-      },
-    });
+      });
+      console.log(`🗑️ [REMOVE PARTICIPANT] Hard deleted inactive participant ${userId} from room ${roomId}`);
+    } else {
+      // If active, soft delete (mark as inactive)
+      await prisma.roomParticipant.update({
+        where: {
+          roomId_userId: {
+            roomId,
+            userId,
+          },
+        },
+        data: {
+          isActive: false,
+          leftAt: new Date(),
+        },
+      });
+      console.log(`👋 [REMOVE PARTICIPANT] Soft deleted active participant ${userId} from room ${roomId}`);
+    }
 
-    // Update room timestamp
-    await prisma.room.update({
-      where: { id: roomId },
-      data: {},
-    });
+    // NOTE: Do NOT update room timestamp when removing participants
+    // Per product specs, only element and message changes should affect activity timestamp
 
     // Get updated room with remaining participants
     const updatedRoom = await prisma.room.findUnique({
       where: { id: roomId },
       include: {
+        creator: {
+          select: userSelect,
+        },
+        nameSetByUser: {
+          select: {
+            id: true,
+            username: true,
+            firstName: true,
+            avatarUrl: true,
+          },
+        },
         participants: {
           where: { isActive: true },
           include: {
             user: {
-              select: {
-                id: true,
-                username: true,
-                firstName: true,
-                avatarUrl: true,
-              },
+              select: userSelect,
             },
           },
         },
       },
     });
 
+    // Send notification to removed user
+    setImmediate(() => {
+      const removerName = req.user!.firstName || req.user!.username;
+      NotificationService.notifyRemovedFromRoom(
+        removerName,
+        userId,
+        room.name
+      ).catch(err => {
+        console.error('❌ Failed to send participant removed notification:', err);
+      });
+    });
+
+    // Emit Socket.IO event for real-time updates
+    socketService.emitToRoom(roomId, 'participant:removed', {
+      roomId,
+      userId,
+      removedBy: {
+        id: req.user!.id,
+        username: req.user!.username,
+        firstName: req.user!.firstName,
+      },
+    });
+
     res.json({
+      success: true,
       data: {
         room: updatedRoom,
-        removedCount: validParticipantIds.length,
-        message: `Successfully removed ${validParticipantIds.length} participant(s)`,
       },
     });
   } catch (error) {

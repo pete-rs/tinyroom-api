@@ -47,6 +47,37 @@ app.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
+// Database latency test
+app.get('/db-test', asyncHandler(async (req: Request, res: Response) => {
+  const { prisma } = await import('./config/prisma');
+  const start = Date.now();
+  
+  try {
+    // Simple query to test database latency
+    await prisma.$queryRaw`SELECT 1`;
+    const duration = Date.now() - start;
+    
+    res.json({
+      status: 'ok',
+      latency: `${duration}ms`,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error) {
+    const duration = Date.now() - start;
+    res.status(500).json({
+      status: 'error',
+      latency: `${duration}ms`,
+      error: error instanceof Error ? error.message : 'Unknown error',
+    });
+  }
+}));
+
+// Database stats endpoint (temporary - remove in production)
+app.get('/db-stats', asyncHandler(async (req: Request, res: Response) => {
+  const { getDatabaseStats } = await import('./controllers/debugController');
+  return getDatabaseStats(req, res);
+}));
+
 // Test endpoint for debugging
 app.post('/api/test/token', asyncHandler(async (req: Request, res: Response) => {
   const authHeader = req.headers.authorization;

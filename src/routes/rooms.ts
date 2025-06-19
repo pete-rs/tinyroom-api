@@ -45,6 +45,6 @@ router.delete('/:roomId/elements/:elementId', asyncHandler(deleteElement)); // D
 
 // Participant management (creator only)
 router.post('/:id/participants', asyncHandler(addParticipants)); // Add participants to room
-router.delete('/:id/participants', asyncHandler(removeParticipants)); // Remove participants from room
+router.delete('/:id/participants/:userId', asyncHandler(removeParticipants)); // Remove single participant from room
 
 export default router;

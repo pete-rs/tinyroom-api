@@ -46,7 +46,6 @@ Response:
     {
       "id": "room-uuid",
       "name": "Italian Vacation Planning",
-      "snapshotUrl": "https://...", // or null
       "createdAt": "2025-06-14T...",
       "updatedAt": "2025-06-14T...",
       "participants": [
@@ -103,7 +102,6 @@ Use this when creating a room to show the user picker.
 struct Room: Codable {
     let id: String
     let name: String // No longer optional!
-    let snapshotUrl: String?
     let createdAt: Date
     let updatedAt: Date
     let participants: [Participant]
@@ -162,11 +160,8 @@ class MyRoomsViewController: UIViewController {
         }
         
         // Snapshot
-        if let snapshotUrl = room.snapshotUrl {
-            cell.snapshotImageView.sd_setImage(with: URL(string: snapshotUrl))
-        } else {
-            cell.snapshotImageView.backgroundColor = .systemGray6
-        }
+        // Snapshots removed - show placeholder or room initials
+        cell.snapshotImageView.backgroundColor = .systemGray6
     }
 }
 ```
@@ -225,7 +220,6 @@ This clears the unread indicator for that user.
 - Show element count
 - Show last updated time
 - Show unread indicator (red dot with count)
-- Show room snapshot thumbnail
 
 ### Create Room Modal
 1. Full screen modal slides up
@@ -243,7 +237,6 @@ This clears the unread indicator for that user.
 - [ ] Create room with 1 participant works
 - [ ] Create room with multiple participants works
 - [ ] Room name is required (can't create without)
-- [ ] Room snapshots display correctly
 - [ ] Rooms sort by most recent activity
 - [ ] Pull to refresh works on My Rooms
 - [ ] Error handling for all edge cases

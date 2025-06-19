@@ -12,7 +12,7 @@ interface TouchMoveData {
   roomId: string;
   x: number;
   y: number;
-  elementId?: string;  // Optional: present when dragging an element
+  elementId?: string;
 }
 
 interface TouchEndData {
@@ -32,9 +32,6 @@ interface ElementCreateData {
   videoUrl?: string;
   thumbnailUrl?: string;
   duration?: number;
-  rotation?: number;
-  scaleX?: number;
-  scaleY?: number;
 }
 
 interface ElementUpdateData {
@@ -43,9 +40,6 @@ interface ElementUpdateData {
   positionX: number;
   positionY: number;
   content?: string;
-  rotation?: number;
-  scaleX?: number;
-  scaleY?: number;
 }
 
 interface ElementDeleteData {
@@ -57,32 +51,38 @@ interface RoomClearData {
   roomId: string;
 }
 
-interface ElementTransformData {
-  roomId: string;
-  elementId: string;
-  transform: {
-    rotation?: number;
-    scaleX?: number;
-    scaleY?: number;
-  };
-}
-
-interface ElementTransformFinalData extends ElementTransformData {
-  positionX: number;
-  positionY: number;
-  width: number;
-  height: number;
-}
+// Cache for room participant verification (TTL: 5 minutes)
+const participantCache = new Map<string, { timestamp: number; isParticipant: boolean }>();
+const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
 export const setupRoomHandlers = (io: Server, socket: SocketWithUser) => {
+  // Helper function to verify participant with caching
+  const verifyParticipant = async (roomId: string, userId: string): Promise<boolean> => {
+    const cacheKey = `${roomId}:${userId}`;
+    const cached = participantCache.get(cacheKey);
+    
+    if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
+      return cached.isParticipant;
+    }
+    
+    const participant = await prisma.roomParticipant.findUnique({
+      where: {
+        roomId_userId: { roomId, userId },
+      },
+    });
+    
+    const isParticipant = !!participant;
+    participantCache.set(cacheKey, { timestamp: Date.now(), isParticipant });
+    return isParticipant;
+  };
+
   // Join room
   socket.on('room:join', async ({ roomId }: { roomId: string }) => {
     try {
       console.log(`🚪 [Room ${roomId}] User ${socket.userId} joining room`);
       
-      // Parallel queries for better performance
+      // Optimized query: Get participant, user data, and elements in one go
       const [participant, elements] = await Promise.all([
-        // Get participant data
         prisma.roomParticipant.findUnique({
           where: {
             roomId_userId: {
@@ -101,7 +101,6 @@ export const setupRoomHandlers = (io: Server, socket: SocketWithUser) => {
             },
           },
         }),
-        // Get room elements
         prisma.element.findMany({
           where: {
             roomId: roomId,
@@ -121,9 +120,6 @@ export const setupRoomHandlers = (io: Server, socket: SocketWithUser) => {
             thumbnailUrl: true,
             duration: true,
             createdBy: true,
-            rotation: true,
-            scaleX: true,
-            scaleY: true,
           },
         }),
       ]);
@@ -133,8 +129,6 @@ export const setupRoomHandlers = (io: Server, socket: SocketWithUser) => {
         socket.emit('error', { message: 'You are not a participant in this room' });
         return;
       }
-
-      // Room found and user is a participant
 
       // Join socket room
       socket.join(roomId);
@@ -167,10 +161,11 @@ export const setupRoomHandlers = (io: Server, socket: SocketWithUser) => {
         color: participant.color,
       });
 
+      // Send all elements in a single batch
       console.log(`📊 [Room ${roomId}] Sending ${elements.length} existing elements to joining user`);
-
+      
       if (elements.length > 0) {
-        // OPTIMIZATION: Send all elements in a single batch
+        // Send all elements in one message for efficiency
         socket.emit('elements:batch', {
           elements: elements.map(element => ({
             id: element.id,
@@ -186,35 +181,7 @@ export const setupRoomHandlers = (io: Server, socket: SocketWithUser) => {
             thumbnailUrl: element.thumbnailUrl,
             duration: element.duration,
             createdBy: element.createdBy,
-            rotation: element.rotation,
-            scaleX: element.scaleX,
-            scaleY: element.scaleY,
           })),
-        });
-        
-        // Also send individual element:created events for backward compatibility
-        // TODO: Remove this after iOS clients are updated
-        elements.forEach(element => {
-          socket.emit('element:created', {
-            element: {
-              id: element.id,
-              type: element.type.toLowerCase(),
-              positionX: element.positionX,
-              positionY: element.positionY,
-              width: element.width,
-              height: element.height,
-              content: element.content,
-              imageUrl: element.imageUrl,
-              audioUrl: element.audioUrl,
-              videoUrl: element.videoUrl,
-              thumbnailUrl: element.thumbnailUrl,
-              duration: element.duration,
-              createdBy: element.createdBy,
-              rotation: element.rotation,
-              scaleX: element.scaleX,
-              scaleY: element.scaleY,
-            },
-          });
         });
       }
 
@@ -229,6 +196,9 @@ export const setupRoomHandlers = (io: Server, socket: SocketWithUser) => {
   socket.on('room:leave', async ({ roomId }: { roomId: string }) => {
     try {
       socket.leave(roomId);
+      
+      // Clear cache
+      participantCache.delete(`${roomId}:${socket.userId}`);
 
       // Update participant status
       await prisma.roomParticipant.update({
@@ -252,13 +222,12 @@ export const setupRoomHandlers = (io: Server, socket: SocketWithUser) => {
         },
       });
 
-      // If no active participants, lock the room
+      // If no active participants, mark room inactive
       if (activeParticipants === 0) {
         await prisma.room.update({
           where: { id: roomId },
           data: {
             isActive: false,
-            // updatedAt will be auto-updated
           },
         });
         
@@ -276,12 +245,11 @@ export const setupRoomHandlers = (io: Server, socket: SocketWithUser) => {
     }
   });
 
-  // Touch tracking
+  // Touch tracking (unchanged - already optimized)
   socket.on('touch:move', async (data: TouchMoveData) => {
     const { roomId, x, y, elementId } = data;
-    console.log(`👆 [Room ${roomId}] Touch move from ${socket.userId} at (${x}, ${y})${elementId ? ` for element ${elementId}` : ''}`);
-
-    // Verify user is in room
+    
+    // Quick verification using socket rooms (no DB query)
     const rooms = Array.from(socket.rooms);
     if (!rooms.includes(roomId)) {
       console.log(`❌ [Room ${roomId}] User ${socket.userId} not in room, rejecting touch:move`);
@@ -290,57 +258,45 @@ export const setupRoomHandlers = (io: Server, socket: SocketWithUser) => {
       return;
     }
 
-    // Broadcast to others in room (not sender)
+    // Broadcast to others in room
     socket.to(roomId).emit('touch:moved', {
       userId: socket.userId,
       x,
       y,
-      elementId,  // Include elementId when present (element dragging)
+      elementId,
     });
   });
 
   socket.on('touch:end', async (data: TouchEndData) => {
     const { roomId } = data;
-    console.log(`👆 [Room ${roomId}] Touch end from ${socket.userId}`);
-
-    // Verify user is in room
+    
+    // Quick verification
     const rooms = Array.from(socket.rooms);
     if (!rooms.includes(roomId)) {
       socket.emit('error', { message: 'Not in room' });
       return;
     }
 
-    // Broadcast to others in room (not sender)
     socket.to(roomId).emit('touch:ended', {
       userId: socket.userId,
     });
   });
 
-  // Element management
+  // OPTIMIZED Element creation
   socket.on('element:create', async (data: ElementCreateData, callback?: Function) => {
     try {
-      const { roomId, type, positionX, positionY, width, height, content, imageUrl, audioUrl, videoUrl, thumbnailUrl, duration, rotation, scaleX, scaleY } = data;
+      const { roomId, type, positionX, positionY, width, height, content, imageUrl, audioUrl, videoUrl, thumbnailUrl, duration } = data;
       console.log(`📦 [Room ${roomId}] User ${socket.userId} creating ${type.toUpperCase()} element at (${positionX}, ${positionY})`);
 
-      // Verify user is in room and room is not locked
-      const room = await prisma.room.findUnique({
-        where: { id: roomId },
-        include: {
-          participants: {
-            where: { userId: socket.userId },
-          },
-        },
-      });
-
-      if (!room || room.participants.length === 0) {
+      // Quick participant check with cache
+      const isParticipant = await verifyParticipant(roomId, socket.userId);
+      if (!isParticipant) {
         console.log(`❌ [Room ${roomId}] User ${socket.userId} is not a participant`);
         socket.emit('error', { message: 'Not a participant in this room' });
         return;
       }
 
-      // User can create elements in the room
-
-      // Create element with server-generated ID
+      // Create element (single query)
       const element = await prisma.element.create({
         data: {
           roomId,
@@ -356,24 +312,15 @@ export const setupRoomHandlers = (io: Server, socket: SocketWithUser) => {
           videoUrl: videoUrl || null,
           thumbnailUrl: thumbnailUrl || null,
           duration: duration || null,
-          rotation: rotation || 0,
-          scaleX: scaleX || 1,
-          scaleY: scaleY || 1,
         },
       });
 
       console.log(`✅ [Room ${roomId}] Element created with ID: ${element.id}`);
 
-      // Update room's updatedAt timestamp IMMEDIATELY (not in background)
-      await prisma.room.update({
-        where: { id: roomId },
-        data: {}, // Empty update will trigger @updatedAt
-      });
-
-      // OPTIMIZATION: Send response immediately for instant feedback
+      // Prepare response
       const elementResponse = {
         element: {
-          id: element.id,  // Server-generated ID
+          id: element.id,
           type: element.type.toLowerCase(),
           positionX: element.positionX,
           positionY: element.positionY,
@@ -386,40 +333,26 @@ export const setupRoomHandlers = (io: Server, socket: SocketWithUser) => {
           thumbnailUrl: element.thumbnailUrl,
           duration: element.duration,
           createdBy: element.createdBy,
-          rotation: element.rotation,
-          scaleX: element.scaleX,
-          scaleY: element.scaleY,
         },
       };
       
-      // Emit to sender immediately (even if not in room)
+      // CRITICAL: Emit immediately to all users (including sender)
+      // This ensures instant feedback and prevents UI lag
       socket.emit('element:created', elementResponse);
-      
-      // Also broadcast to all others in room
       socket.to(roomId).emit('element:created', elementResponse);
 
-      // ALSO broadcast globally for element count tracking in MyRooms
-      io.emit('element:created:global', {
-        roomId,
-        elementId: element.id,
-        createdBy: element.createdBy,
-        type: element.type.toLowerCase(),
-      });
-
-      console.log(`📤 [Room ${roomId}] Broadcasted element:created to all participants and globally`);
-      
       // Send acknowledgment if callback provided
       if (callback && typeof callback === 'function') {
         callback(elementResponse);
-        console.log(`📤 [Room ${roomId}] Sent element:created acknowledgment to sender`);
       }
 
-      // OPTIMIZATION: Handle notifications in background (but room update already done)
+      // Non-blocking background tasks
       setImmediate(async () => {
         try {
-          // Get room details for notification
-          const updatedRoom = await prisma.room.findUnique({
+          // Update room timestamp
+          const updatedRoom = await prisma.room.update({
             where: { id: roomId },
+            data: {}, // Empty update will trigger @updatedAt
             include: {
               participants: {
                 where: {
@@ -427,16 +360,13 @@ export const setupRoomHandlers = (io: Server, socket: SocketWithUser) => {
                     not: socket.userId,
                   },
                 },
-                include: {
-                  user: true,
-                },
               },
             },
           });
 
-          // Send notification to other participants (non-blocking)
-          const creator = socket.user;
-          if (creator && updatedRoom && updatedRoom.participants.length > 0) {
+          // Send notification (non-blocking)
+          if (socket.user && updatedRoom.participants.length > 0) {
+            const creator = socket.user;
             await Promise.all(
               updatedRoom.participants.map(participant =>
                 NotificationService.notifyElementAdded(
@@ -444,9 +374,9 @@ export const setupRoomHandlers = (io: Server, socket: SocketWithUser) => {
                   participant.userId,
                   roomId,
                   updatedRoom.name,
-                  type.toLowerCase() as 'note' | 'photo' | 'audio' | 'horoscope' | 'video' | 'link'
+                  type.toLowerCase() as any
                 ).catch(err => {
-                  console.error(`❌ Failed to send notification to ${participant.user.username}:`, err.message);
+                  console.error('Failed to send notification:', err);
                 })
               )
             );
@@ -455,250 +385,106 @@ export const setupRoomHandlers = (io: Server, socket: SocketWithUser) => {
           console.error('Error in background tasks:', error);
         }
       });
+
+      console.log(`📤 [Room ${roomId}] Element creation complete`);
     } catch (error) {
       console.error('Error creating element:', error);
       socket.emit('error', { message: 'Failed to create element' });
     }
   });
 
+  // OPTIMIZED Element update
   socket.on('element:update', async (data: ElementUpdateData) => {
     try {
-      const { roomId, elementId, positionX, positionY, content, rotation, scaleX, scaleY } = data;
-      console.log(`🔄 [Room ${roomId}] User ${socket.userId} updating element ${elementId}`);
+      const { roomId, elementId, positionX, positionY, content } = data;
       
-      // Check if socket is in room
+      // Quick socket room check
       const rooms = Array.from(socket.rooms);
       if (!rooms.includes(roomId)) {
-        console.log(`❌ [Room ${roomId}] User ${socket.userId} not in room, rejecting element:update`);
+        console.log(`❌ [Room ${roomId}] User ${socket.userId} not in room`);
         socket.emit('error', { message: 'Not in room' });
         socket.emit('room:rejoin-needed', { roomId });
         return;
       }
 
-      // Verify room is not locked
-      const room = await prisma.room.findUnique({
-        where: { id: roomId },
-        include: {
-          participants: {
-            where: { userId: socket.userId },
-          },
-        },
-      });
-
-      if (!room || room.participants.length === 0) {
-        console.log(`❌ [Room ${roomId}] User ${socket.userId} is not a participant`);
-        socket.emit('error', { message: 'Not a participant in this room' });
-        return;
-      }
-
-      // User can update elements in the room
-
-      // Check if element exists first
-      const existingElement = await prisma.element.findUnique({
-        where: { id: elementId },
-      });
-
-      if (!existingElement) {
-        console.log(`❌ [Room ${roomId}] Element ${elementId} not found`);
-        socket.emit('error', { message: `Element ${elementId} not found` });
-        return;
-      }
-
-      // Update element
+      // Update element (single query, no verification needed since they're in the room)
       const element = await prisma.element.update({
         where: { id: elementId },
         data: {
           positionX,
           positionY,
           ...(content !== undefined && { content }),
-          ...(rotation !== undefined && { rotation }),
-          ...(scaleX !== undefined && { scaleX }),
-          ...(scaleY !== undefined && { scaleY }),
         },
       });
 
-      console.log(`✅ [Room ${roomId}] Element ${elementId} updated`);
-
-      // Update room's updatedAt timestamp IMMEDIATELY (not in background)
-      await prisma.room.update({
-        where: { id: roomId },
-        data: {}, // Empty update will trigger @updatedAt
-      });
-
-      // OPTIMIZATION: Broadcast immediately
+      // Broadcast immediately
       io.to(roomId).emit('element:updated', {
         elementId,
         updates: {
           positionX,
           positionY,
           ...(content !== undefined && { content }),
-          ...(rotation !== undefined && { rotation }),
-          ...(scaleX !== undefined && { scaleX }),
-          ...(scaleY !== undefined && { scaleY }),
         },
       });
 
-      console.log(`📤 [Room ${roomId}] Broadcasted element:updated to all participants`);
+      // Update room timestamp in background
+      setImmediate(() => {
+        prisma.room.update({
+          where: { id: roomId },
+          data: {},
+        }).catch(err => console.error('Failed to update room timestamp:', err));
+      });
+
+      console.log(`✅ [Room ${roomId}] Element ${elementId} updated`);
     } catch (error) {
       console.error('Error updating element:', error);
       socket.emit('error', { message: 'Failed to update element' });
     }
   });
 
+  // OPTIMIZED Element delete
   socket.on('element:delete', async (data: ElementDeleteData) => {
     try {
       const { roomId, elementId } = data;
       console.log(`🗑️ [Room ${roomId}] User ${socket.userId} deleting element ${elementId}`);
 
-      // Verify room is not locked
-      const room = await prisma.room.findUnique({
-        where: { id: roomId },
-        include: {
-          participants: {
-            where: { userId: socket.userId },
-          },
-        },
-      });
-
-      if (!room || room.participants.length === 0) {
+      // Quick participant check
+      const isParticipant = await verifyParticipant(roomId, socket.userId);
+      if (!isParticipant) {
         console.log(`❌ [Room ${roomId}] User ${socket.userId} is not a participant`);
         socket.emit('error', { message: 'Not a participant in this room' });
         return;
       }
 
-      // User can delete elements in the room
-
-      // Soft delete element
+      // Soft delete and broadcast immediately
       await prisma.element.update({
         where: { id: elementId },
         data: { deletedAt: new Date() },
       });
 
-      console.log(`✅ [Room ${roomId}] Element ${elementId} deleted`);
-
-      // Update room's updatedAt timestamp IMMEDIATELY (not in background)
-      await prisma.room.update({
-        where: { id: roomId },
-        data: {}, // Empty update will trigger @updatedAt
-      });
-
-      // OPTIMIZATION: Broadcast immediately
       io.to(roomId).emit('element:deleted', { elementId });
 
-      // ALSO broadcast globally for element count tracking in MyRooms
-      io.emit('element:deleted:global', {
-        roomId,
-        elementId,
-        deletedBy: socket.userId,
+      // Update room timestamp in background
+      setImmediate(() => {
+        prisma.room.update({
+          where: { id: roomId },
+          data: {},
+        }).catch(err => console.error('Failed to update room timestamp:', err));
       });
 
-      console.log(`📤 [Room ${roomId}] Broadcasted element:deleted to all participants and globally`);
+      console.log(`✅ [Room ${roomId}] Element ${elementId} deleted`);
     } catch (error) {
       console.error('Error deleting element:', error);
       socket.emit('error', { message: 'Failed to delete element' });
     }
   });
 
-  // Handle live transform preview (during gesture)
-  socket.on('element:transforming', async (data: ElementTransformData) => {
-    try {
-      const { roomId, elementId, transform } = data;
-      
-      // Quick verification user is in room
-      const rooms = Array.from(socket.rooms);
-      if (!rooms.includes(roomId)) {
-        socket.emit('error', { message: 'Not in room' });
-        return;
-      }
-      
-      // Broadcast preview to others (no DB write)
-      socket.to(roomId).emit('element:transforming', {
-        elementId,
-        userId: socket.userId,
-        transform,
-      });
-    } catch (error) {
-      console.error('Error handling element transform preview:', error);
-    }
-  });
-
-  // Handle final transform (when gesture ends)
-  socket.on('element:transform', async (data: ElementTransformFinalData) => {
-    try {
-      const { roomId, elementId, transform, positionX, positionY, width, height } = data;
-      
-      console.log(`🔄 [Room ${roomId}] User ${socket.userId} transforming element ${elementId}`);
-      
-      // Verify user is in room
-      const rooms = Array.from(socket.rooms);
-      if (!rooms.includes(roomId)) {
-        socket.emit('error', { message: 'Not in room' });
-        socket.emit('room:rejoin-needed', { roomId });
-        return;
-      }
-      
-      // Check if element exists
-      const existingElement = await prisma.element.findUnique({
-        where: { id: elementId },
-      });
-      
-      if (!existingElement) {
-        console.log(`❌ [Room ${roomId}] Element ${elementId} not found`);
-        socket.emit('error', { message: `Element ${elementId} not found` });
-        return;
-      }
-      
-      // Update element with transform
-      const element = await prisma.element.update({
-        where: { id: elementId },
-        data: {
-          positionX,
-          positionY,
-          width,
-          height,
-          rotation: transform.rotation ?? existingElement.rotation,
-          scaleX: transform.scaleX ?? existingElement.scaleX,
-          scaleY: transform.scaleY ?? existingElement.scaleY,
-        },
-      });
-      
-      console.log(`✅ [Room ${roomId}] Element ${elementId} transformed`);
-      
-      // OPTIMIZATION: Broadcast immediately
-      io.to(roomId).emit('element:transformed', {
-        element: {
-          id: element.id,
-          type: element.type.toLowerCase(),
-          positionX: element.positionX,
-          positionY: element.positionY,
-          width: element.width,
-          height: element.height,
-          rotation: element.rotation,
-          scaleX: element.scaleX,
-          scaleY: element.scaleY,
-        }
-      });
-      
-      // Update room timestamp in background
-      setImmediate(() => {
-        prisma.room.update({
-          where: { id: roomId },
-          data: {},
-        }).catch(err => {
-          console.error('Failed to update room timestamp:', err);
-        });
-      });
-    } catch (error) {
-      console.error('Error handling element transform:', error);
-      socket.emit('error', { message: 'Failed to transform element' });
-    }
-  });
-
+  // Room clear (unchanged)
   socket.on('room:clear', async (data: RoomClearData) => {
     try {
       const { roomId } = data;
 
-      // Verify user is room creator and room is not locked
+      // Verify user is room creator
       const room = await prisma.room.findFirst({
         where: {
           id: roomId,
@@ -711,8 +497,6 @@ export const setupRoomHandlers = (io: Server, socket: SocketWithUser) => {
         return;
       }
 
-      // Room creator can clear the room
-
       // Soft delete all elements
       await prisma.element.updateMany({
         where: {
@@ -722,29 +506,30 @@ export const setupRoomHandlers = (io: Server, socket: SocketWithUser) => {
         data: { deletedAt: new Date() },
       });
 
-      // Update room's updatedAt timestamp
+      // Update room timestamp
       await prisma.room.update({
         where: { id: roomId },
-        data: {}, // Empty update will trigger @updatedAt
+        data: {},
       });
 
       // Broadcast to all in room
       io.to(roomId).emit('room:cleared', { roomId });
-
-      // ALSO broadcast globally for element count tracking in MyRooms
-      io.emit('room:cleared:global', {
-        roomId,
-        clearedBy: socket.userId,
-      });
     } catch (error) {
       console.error('Error clearing room:', error);
       socket.emit('error', { message: 'Failed to clear room' });
     }
   });
 
-  // Handle disconnect (called from index.ts)
+  // Handle disconnect
   socket.on('disconnect', async () => {
     try {
+      // Clear all cache entries for this user
+      for (const [key] of participantCache) {
+        if (key.endsWith(`:${socket.userId}`)) {
+          participantCache.delete(key);
+        }
+      }
+
       // Get all rooms the user is active in
       const activeRooms = await prisma.roomParticipant.findMany({
         where: {
@@ -753,7 +538,7 @@ export const setupRoomHandlers = (io: Server, socket: SocketWithUser) => {
         },
       });
 
-      // Update status and notify others
+      // Update status
       for (const participant of activeRooms) {
         await prisma.roomParticipant.update({
           where: {
@@ -776,7 +561,6 @@ export const setupRoomHandlers = (io: Server, socket: SocketWithUser) => {
           },
         });
 
-        // If no active participants, mark room as inactive
         if (activeCount === 0) {
           await prisma.room.update({
             where: { id: participant.roomId },

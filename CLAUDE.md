@@ -79,7 +79,6 @@ The app uses these main entities:
 - **User**: Auth0 ID, email, username, profile info (firstName, dateOfBirth), avatarUrl, oneSignalPlayerId
 - **Room**: Collaborative canvas rooms (2+ participants)
   - `name`: REQUIRED room name (no longer optional)
-  - `snapshotUrl`: Visual thumbnail of room content
   - `updatedAt`: Auto-updates when room or its elements change
 - **RoomParticipant**: Links users to rooms with assigned colors
   - `lastVisitedAt`: Tracks when user last visited (for unread indicators)

@@ -161,6 +161,48 @@ export class NotificationService {
   }
 
   /**
+   * Send notification when user is added to a room
+   */
+  static async notifyAddedToRoom(
+    adderName: string,
+    recipientId: string,
+    roomId: string,
+    roomName: string
+  ): Promise<void> {
+    await this.sendToUser({
+      userId: recipientId,
+      title: 'Added to Room',
+      message: `${adderName} added you to "${roomName}"`,
+      data: {
+        type: 'added_to_room',
+        roomId,
+        roomName,
+        addedBy: adderName,
+      },
+    });
+  }
+
+  /**
+   * Send notification when user is removed from a room
+   */
+  static async notifyRemovedFromRoom(
+    removerName: string,
+    recipientId: string,
+    roomName: string
+  ): Promise<void> {
+    await this.sendToUser({
+      userId: recipientId,
+      title: 'Removed from Room',
+      message: `${removerName} removed you from "${roomName}"`,
+      data: {
+        type: 'removed_from_room',
+        roomName,
+        removedBy: removerName,
+      },
+    });
+  }
+
+  /**
    * Send notification when a new message is sent
    */
   static async notifyNewMessage(

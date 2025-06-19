@@ -33,17 +33,17 @@ interface MessageReadData {
   messageIds: string[];
 }
 
-// Typing indicator management
+// Typing indicator debouncing
 const typingTimers = new Map<string, NodeJS.Timeout>();
 
 export const setupMessageHandlers = (io: Server, socket: SocketWithUser) => {
-  // Send message with immediate response
+  // OPTIMIZED: Send message with immediate response
   socket.on('message:send', async (data: MessageSendData, callback?: Function) => {
     try {
       const { roomId, text, tempId } = data;
       console.log(`💬 [Room ${roomId}] User ${socket.userId} sending message`);
 
-      // Validate input
+      // Quick validation
       if (!text || typeof text !== 'string') {
         socket.emit('error', { message: 'Message text is required' });
         return;
@@ -60,22 +60,14 @@ export const setupMessageHandlers = (io: Server, socket: SocketWithUser) => {
         return;
       }
 
-      // Verify user is in room
-      const participant = await prisma.roomParticipant.findUnique({
-        where: {
-          roomId_userId: {
-            roomId,
-            userId: socket.userId,
-          },
-        },
-      });
-
-      if (!participant) {
-        socket.emit('error', { message: 'Not a participant in this room' });
+      // Quick room verification using socket rooms
+      const rooms = Array.from(socket.rooms);
+      if (!rooms.includes(roomId)) {
+        socket.emit('error', { message: 'Not in room' });
         return;
       }
 
-      // Create message
+      // Create message - minimal query
       const message = await prisma.message.create({
         data: {
           roomId,
@@ -91,89 +83,71 @@ export const setupMessageHandlers = (io: Server, socket: SocketWithUser) => {
               avatarUrl: true,
             },
           },
-          reactions: {
-            select: {
-              userId: true,
-              createdAt: true,
-            },
-          },
-          readBy: {
-            select: {
-              userId: true,
-              readAt: true,
-            },
-          },
         },
       });
 
-      // Update room's messagesUpdatedAt timestamp
-      const room = await prisma.room.update({
-        where: { id: roomId },
-        data: {
-          messagesUpdatedAt: new Date(),
-        },
-        include: {
-          participants: {
-            where: {
-              userId: {
-                not: socket.userId,
-              },
-            },
-          },
-        },
-      });
-
-      // OPTIMIZATION: Emit immediately to all users
+      // OPTIMIZATION: Immediate broadcast with minimal data
       const messageResponse = {
         message: {
           ...message,
+          reactions: [],
+          readBy: [],
           tempId, // Include temp ID for client mapping
         },
       };
-      
-      // 1. Send full message to room participants (existing behavior)
-      io.to(roomId).emit('message:new', messageResponse);
 
-      // 2. ALSO broadcast globally for unread indicators in MyRooms
-      io.emit('message:new:global', {
-        roomId: message.roomId,
-        senderId: message.senderId,
-        senderName: message.sender.firstName || message.sender.username,
-        timestamp: message.createdAt,
-        // Don't include message content for privacy
-      });
+      // Send to all users immediately
+      io.to(roomId).emit('message:new', messageResponse);
 
       // Send acknowledgment if callback provided
       if (callback && typeof callback === 'function') {
-        callback({ success: true, messageId: message.id, tempId });
+        callback({ success: true, messageId: message.id });
       }
 
-      console.log(`✅ [Room ${roomId}] Message sent successfully and broadcast globally`);
-
-      // OPTIMIZATION: Handle notifications in background (non-blocking)
+      // OPTIMIZATION: Background tasks (non-blocking)
       setImmediate(async () => {
         try {
-          const truncatedText = trimmedText.length > 30 
-            ? trimmedText.substring(0, 30) + '...' 
-            : trimmedText;
+          // Update room timestamp and get participants for notifications
+          const room = await prisma.room.update({
+            where: { id: roomId },
+            data: {}, // Empty update will trigger @updatedAt
+            include: {
+              participants: {
+                where: {
+                  userId: {
+                    not: socket.userId,
+                  },
+                },
+              },
+            },
+          });
 
-          await Promise.all(
-            room.participants.map(participant =>
-              NotificationService.notifyNewMessage(
-                socket.user.firstName || socket.user.username,
-                participant.userId,
-                roomId,
-                room.name,
-                truncatedText
-              ).catch(err => {
-                console.error(`❌ Failed to notify ${participant.userId}:`, err.message);
-              })
-            )
-          );
+          // Send push notifications (non-blocking)
+          if (socket.user && room.participants.length > 0) {
+            const truncatedText = trimmedText.length > 30 
+              ? trimmedText.substring(0, 30) + '...' 
+              : trimmedText;
+
+            await Promise.all(
+              room.participants.map(participant =>
+                NotificationService.notifyNewMessage(
+                  socket.user.firstName || socket.user.username,
+                  participant.userId,
+                  roomId,
+                  room.name,
+                  truncatedText
+                ).catch(err => {
+                  console.error(`❌ Failed to notify ${participant.userId}:`, err.message);
+                })
+              )
+            );
+          }
         } catch (error) {
-          console.error('Error sending notifications:', error);
+          console.error('Error in message background tasks:', error);
         }
       });
+
+      console.log(`✅ [Room ${roomId}] Message sent successfully`);
     } catch (error) {
       console.error('Error sending message:', error);
       socket.emit('error', { message: 'Failed to send message' });
@@ -183,29 +157,24 @@ export const setupMessageHandlers = (io: Server, socket: SocketWithUser) => {
     }
   });
 
-  // Delete message
+  // OPTIMIZED: Delete message with immediate response
   socket.on('message:delete', async (data: MessageDeleteData) => {
     try {
       const { roomId, messageId } = data;
       console.log(`🗑️ [Room ${roomId}] User ${socket.userId} deleting message ${messageId}`);
 
-      // Get message to verify ownership
+      // Quick verification of message ownership
       const message = await prisma.message.findFirst({
         where: {
           id: messageId,
           roomId,
+          senderId: socket.userId, // Only check if user is sender
           deletedAt: null,
         },
       });
 
       if (!message) {
-        socket.emit('error', { message: 'Message not found' });
-        return;
-      }
-
-      // Only sender can delete
-      if (message.senderId !== socket.userId) {
-        socket.emit('error', { message: 'You can only delete your own messages' });
+        socket.emit('error', { message: 'Message not found or not authorized' });
         return;
       }
 
@@ -215,43 +184,32 @@ export const setupMessageHandlers = (io: Server, socket: SocketWithUser) => {
         data: { deletedAt: new Date() },
       });
 
-      // OPTIMIZATION: Emit immediately
+      // Immediate broadcast
       io.to(roomId).emit('message:deleted', {
         messageId,
       });
 
-      // Also broadcast globally for MyRooms indicators
-      io.emit('message:deleted:global', {
-        roomId,
-        messageId,
-        deletedBy: socket.userId,
-      });
-
-      console.log(`✅ [Room ${roomId}] Message deleted successfully and broadcast globally`);
-
-      // Update room's messagesUpdatedAt timestamp in background
+      // Update room timestamp in background
       setImmediate(() => {
         prisma.room.update({
           where: { id: roomId },
-          data: {
-            messagesUpdatedAt: new Date(),
-          },
-        }).catch(err => {
-          console.error('Failed to update room messagesUpdatedAt:', err);
-        });
+          data: {},
+        }).catch(err => console.error('Failed to update room timestamp:', err));
       });
+
+      console.log(`✅ [Room ${roomId}] Message deleted successfully`);
     } catch (error) {
       console.error('Error deleting message:', error);
       socket.emit('error', { message: 'Failed to delete message' });
     }
   });
 
-  // OPTIMIZED: Typing indicator with auto-timeout
+  // OPTIMIZED: Typing indicator with debouncing
   socket.on('message:typing', async (data: MessageTypingData) => {
     try {
       const { roomId, isTyping } = data;
       
-      // Verify user is in room
+      // Quick socket room check
       const rooms = Array.from(socket.rooms);
       if (!rooms.includes(roomId)) {
         return;
@@ -306,55 +264,35 @@ export const setupMessageHandlers = (io: Server, socket: SocketWithUser) => {
     }
   });
 
-  // Toggle reaction
+  // OPTIMIZED: Toggle reaction with single query
   socket.on('message:reaction:toggle', async (data: MessageReactionData) => {
     try {
       const { roomId, messageId } = data;
       console.log(`❤️ [Room ${roomId}] User ${socket.userId} toggling reaction on message ${messageId}`);
 
-      // Verify user is in room
-      const participant = await prisma.roomParticipant.findUnique({
-        where: {
-          roomId_userId: {
-            roomId,
-            userId: socket.userId,
-          },
-        },
-      });
-
-      if (!participant) {
-        socket.emit('error', { message: 'Not a participant in this room' });
+      // Quick socket room check
+      const rooms = Array.from(socket.rooms);
+      if (!rooms.includes(roomId)) {
+        socket.emit('error', { message: 'Not in room' });
         return;
       }
 
-      // Check if reaction exists
-      const existingReaction = await prisma.messageReaction.findUnique({
+      // Try to delete existing reaction
+      const deleted = await prisma.messageReaction.deleteMany({
         where: {
-          messageId_userId: {
-            messageId,
-            userId: socket.userId,
-          },
+          messageId,
+          userId: socket.userId,
         },
       });
 
-      if (existingReaction) {
-        // Remove reaction
-        await prisma.messageReaction.delete({
-          where: {
-            messageId_userId: {
-              messageId,
-              userId: socket.userId,
-            },
-          },
-        });
-
-        // Emit to all users in room
+      if (deleted.count > 0) {
+        // Reaction was removed
         io.to(roomId).emit('message:reaction:removed', {
           messageId,
           userId: socket.userId,
         });
       } else {
-        // Add reaction
+        // Add new reaction
         await prisma.messageReaction.create({
           data: {
             messageId,
@@ -362,7 +300,6 @@ export const setupMessageHandlers = (io: Server, socket: SocketWithUser) => {
           },
         });
 
-        // Emit to all users in room
         io.to(roomId).emit('message:reaction:added', {
           messageId,
           userId: socket.userId,
@@ -374,13 +311,18 @@ export const setupMessageHandlers = (io: Server, socket: SocketWithUser) => {
     }
   });
 
-  // Mark specific messages as read
+  // OPTIMIZED: Batch mark messages as read
   socket.on('messages:mark-read', async (data: MessageReadData) => {
     try {
       const { roomId, messageIds } = data;
+      
+      if (!messageIds || messageIds.length === 0) {
+        return;
+      }
+
       console.log(`👁️ [Room ${roomId}] User ${socket.userId} marking ${messageIds.length} messages as read`);
 
-      // OPTIMIZATION: Use transaction for atomic operation
+      // Batch create read receipts
       await prisma.$transaction([
         // Create read receipts
         prisma.messageRead.createMany({
@@ -404,7 +346,7 @@ export const setupMessageHandlers = (io: Server, socket: SocketWithUser) => {
         }),
       ]);
 
-      // Emit read receipts to all users in room
+      // Emit read receipts to all users
       io.to(roomId).emit('messages:read-receipts', {
         userId: socket.userId,
         messageIds,
@@ -412,30 +354,6 @@ export const setupMessageHandlers = (io: Server, socket: SocketWithUser) => {
     } catch (error) {
       console.error('Error marking messages as read:', error);
       socket.emit('error', { message: 'Failed to mark messages as read' });
-    }
-  });
-
-  // Mark all messages as read (backward compatibility)
-  socket.on('messages:read', async ({ roomId }: { roomId: string }) => {
-    try {
-      console.log(`👁️ [Room ${roomId}] User ${socket.userId} marking all messages as read`);
-
-      await prisma.roomParticipant.update({
-        where: {
-          roomId_userId: {
-            roomId,
-            userId: socket.userId,
-          },
-        },
-        data: {
-          lastReadAt: new Date(),
-        },
-      });
-
-      // Emit confirmation back to sender
-      socket.emit('messages:read:success', { roomId });
-    } catch (error) {
-      console.error('Error marking messages as read:', error);
     }
   });
 

@@ -18,7 +18,8 @@ model User {
   createdAt   DateTime @default(now()) @map("created_at")
   oneSignalPlayerId String? @map("onesignal_player_id") // OneSignal player ID for push notifications
   
-  createdRooms    Room[]
+  createdRooms    Room[] @relation("RoomCreatedBy")
+  roomsNamedBy    Room[] @relation("RoomNameSetBy")
   roomParticipants RoomParticipant[]
   elements           Element[]
   messages           Message[]
@@ -31,11 +32,13 @@ model User {
 model Room {
   id           String   @id @default(uuid())
   name         String   // Required room name
-  snapshotUrl  String?  @map("snapshot_url") // Visual snapshot/thumbnail of the room
+  nameSetBy    String?  @map("name_set_by") // User who set the room name
+  nameSetByUser User?   @relation("RoomNameSetBy", fields: [nameSetBy], references: [id])
   createdBy    String   @map("created_by")
-  creator      User     @relation(fields: [createdBy], references: [id])
+  creator      User     @relation("RoomCreatedBy", fields: [createdBy], references: [id])
   createdAt    DateTime @default(now()) @map("created_at")
-  updatedAt    DateTime @updatedAt @map("updated_at") // Track when room is updated
+  updatedAt    DateTime @updatedAt @map("updated_at") // Track when room content is updated (elements, name, etc)
+  messagesUpdatedAt DateTime? @map("messages_updated_at") // Track when messages were last sent/deleted
   isActive     Boolean  @default(true) @map("is_active")
   
   participants RoomParticipant[]
@@ -58,6 +61,7 @@ model RoomParticipant {
   isActive       Boolean   @default(true) @map("is_active")
   
   @@id([roomId, userId])
+  @@index([userId]) // Speed up participant lookups
   @@map("room_participants")
 }
 
@@ -78,6 +82,9 @@ model Element {
   duration   Float?    // Audio/video duration in seconds
   width      Float
   height     Float
+  rotation   Float     @default(0) @map("rotation") // Rotation in degrees (0-360)
+  scaleX     Float     @default(1) @map("scale_x") // Horizontal scale factor
+  scaleY     Float     @default(1) @map("scale_y") // Vertical scale factor
   createdAt  DateTime  @default(now()) @map("created_at")
   updatedAt  DateTime  @updatedAt @map("updated_at")
   deletedAt  DateTime? @map("deleted_at")

@@ -2,7 +2,7 @@ import { Router } from 'express';
 import multer from 'multer';
 import { authMiddleware } from '../middleware/auth';
 import { asyncHandler } from '../utils/asyncHandler';
-import { uploadAvatar, uploadImage, uploadRoomSnapshot, uploadAudio, uploadVideo } from '../controllers/uploadController';
+import { uploadAvatar, uploadImage, uploadAudio, uploadVideo } from '../controllers/uploadController';
 
 const router = Router();
 
@@ -84,8 +84,5 @@ router.post('/audio', authMiddleware as any, audioUpload.single('audio'), asyncH
 
 // Video upload endpoint
 router.post('/video', authMiddleware as any, videoUpload.single('video'), asyncHandler(uploadVideo));
-
-// Room snapshot upload endpoint
-router.post('/room/:roomId/snapshot', authMiddleware as any, imageUpload.single('snapshot'), asyncHandler(uploadRoomSnapshot));
 
 export default router;

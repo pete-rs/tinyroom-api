@@ -25,6 +25,19 @@ class SocketService {
     
     console.log(`📤 [Room ${roomId}] Emitted room:updated event`);
   }
+
+  // Generic method to emit any event to a room
+  emitToRoom(roomId: string, event: string, data: any) {
+    if (!this.io) {
+      console.log('❌ Socket.io not initialized');
+      return;
+    }
+
+    // Emit to all clients in the room
+    this.io.to(roomId).emit(event, data);
+    
+    console.log(`📤 [Room ${roomId}] Emitted ${event} event`);
+  }
 }
 
 export const socketService = new SocketService();
