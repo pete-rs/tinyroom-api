@@ -10,14 +10,30 @@ export const getMe = async (req: AuthRequest, res: Response) => {
       throw new AppError(404, 'USER_NOT_FOUND', 'User not found');
     }
 
+    // Get user with follow counts
+    const userWithCounts = await prisma.user.findUnique({
+      where: { id: req.user.id },
+      select: {
+        ...userSelect,
+        dateOfBirth: true,
+        oneSignalPlayerId: true,
+        followersCount: true,
+        followingCount: true,
+      },
+    });
+
+    if (!userWithCounts) {
+      throw new AppError(404, 'USER_NOT_FOUND', 'User not found');
+    }
+
     // Check if profile is complete
-    const profileComplete = req.user.firstName !== '' && 
-                          !req.user.username.startsWith('user_') &&
-                          req.user.dateOfBirth.getTime() !== new Date(0).getTime();
+    const profileComplete = userWithCounts.firstName !== '' && 
+                          !userWithCounts.username.startsWith('user_') &&
+                          userWithCounts.dateOfBirth.getTime() !== new Date(0).getTime();
 
     res.json({
       data: {
-        ...req.user,
+        ...userWithCounts,
         profileComplete,
       },
     });
@@ -57,28 +73,106 @@ export const updateProfile = async (req: AuthRequest, res: Response) => {
 
 export const searchUsers = async (req: AuthRequest, res: Response) => {
   try {
-    const { username } = req.query;
+    const { q } = req.query;
+    const page = parseInt(req.query.page as string) || 1;
+    const limit = parseInt(req.query.limit as string) || 20;
+    const offset = (page - 1) * limit;
 
-    if (!username || typeof username !== 'string') {
-      throw new AppError(400, 'INVALID_QUERY', 'Username query parameter is required');
+    if (!q || typeof q !== 'string') {
+      throw new AppError(400, 'INVALID_QUERY', 'Search query parameter (q) is required');
     }
 
-    const users = await prisma.user.findMany({
-      where: {
-        username: {
-          contains: username,
-          mode: 'insensitive',
-        },
-        id: {
-          not: req.user?.id,
-        },
-      },
-      select: userSelect,
-      take: 20,
-    });
+    if (!req.user) {
+      throw new AppError(401, 'UNAUTHORIZED', 'User not authenticated');
+    }
+
+    // Search both username and firstName
+    const searchPattern = `%${q}%`;
+    
+    // Use raw query for better control and performance
+    const users = await prisma.$queryRaw<Array<{
+      id: string;
+      username: string;
+      first_name: string;
+      email: string;
+      avatar_url: string | null;
+      followers_count: number;
+      following_count: number;
+      following: boolean;
+      follows_me: boolean;
+    }>>`
+      SELECT 
+        u.id,
+        u.username,
+        u.first_name,
+        u.email,
+        u.avatar_url,
+        u.followers_count,
+        u.following_count,
+        CASE WHEN f1.id IS NOT NULL THEN true ELSE false END as following,
+        CASE WHEN f2.id IS NOT NULL THEN true ELSE false END as follows_me
+      FROM users u
+      LEFT JOIN follows f1 ON f1.following_id = u.id AND f1.follower_id = ${req.user.id}
+      LEFT JOIN follows f2 ON f2.follower_id = u.id AND f2.following_id = ${req.user.id}
+      WHERE 
+        u.id != ${req.user.id}
+        AND u.first_name != ''
+        AND NOT u.username LIKE 'user_%'
+        AND (
+          LOWER(u.username) LIKE LOWER(${searchPattern})
+          OR LOWER(u.first_name) LIKE LOWER(${searchPattern})
+        )
+      ORDER BY 
+        -- Prioritize exact matches
+        CASE 
+          WHEN LOWER(u.username) = LOWER(${q}) THEN 0
+          WHEN LOWER(u.first_name) = LOWER(${q}) THEN 1
+          WHEN LOWER(u.username) LIKE LOWER(${q + '%'}) THEN 2
+          WHEN LOWER(u.first_name) LIKE LOWER(${q + '%'}) THEN 3
+          ELSE 4
+        END,
+        u.username ASC
+      LIMIT ${limit}
+      OFFSET ${offset}
+    `;
+
+    // Get total count
+    const totalCount = await prisma.$queryRaw<[{ count: bigint }]>`
+      SELECT COUNT(*)::bigint as count
+      FROM users u
+      WHERE 
+        u.id != ${req.user.id}
+        AND u.first_name != ''
+        AND NOT u.username LIKE 'user_%'
+        AND (
+          LOWER(u.username) LIKE LOWER(${searchPattern})
+          OR LOWER(u.first_name) LIKE LOWER(${searchPattern})
+        )
+    `;
+
+    const total = Number(totalCount[0].count);
+
+    // Transform to camelCase
+    const transformedUsers = users.map(user => ({
+      id: user.id,
+      username: user.username,
+      firstName: user.first_name,
+      email: user.email,
+      avatarUrl: user.avatar_url,
+      followersCount: user.followers_count,
+      followingCount: user.following_count,
+      following: user.following,
+      followsMe: user.follows_me,
+    }));
 
     res.json({
-      data: users,
+      data: transformedUsers,
+      meta: {
+        total,
+        page,
+        limit,
+        hasMore: total > offset + limit,
+      },
     });
   } catch (error) {
     throw error;
@@ -163,6 +257,64 @@ export const updateOneSignalPlayerId = async (req: AuthRequest, res: Response) =
     });
   } catch (error) {
     console.error('Error updating OneSignal player ID:', error);
+    throw error;
+  }
+};
+
+export const getUser = async (req: AuthRequest, res: Response) => {
+  try {
+    const { userId } = req.params;
+
+    if (!req.user) {
+      throw new AppError(401, 'UNAUTHORIZED', 'User not authenticated');
+    }
+
+    // Get user with follow counts and check follow status
+    const [user, following, followsMe] = await Promise.all([
+      prisma.user.findUnique({
+        where: { id: userId },
+        select: {
+          ...userSelect,
+          followersCount: true,
+          followingCount: true,
+          createdAt: true,
+        },
+      }),
+      prisma.follow.findUnique({
+        where: {
+          followerId_followingId: {
+            followerId: req.user.id,
+            followingId: userId,
+          },
+        },
+      }),
+      prisma.follow.findUnique({
+        where: {
+          followerId_followingId: {
+            followerId: userId,
+            followingId: req.user.id,
+          },
+        },
+      }),
+    ]);
+
+    if (!user) {
+      throw new AppError(404, 'USER_NOT_FOUND', 'User not found');
+    }
+
+    // Don't show incomplete profiles
+    if (user.firstName === '' || user.username.startsWith('user_')) {
+      throw new AppError(404, 'USER_NOT_FOUND', 'User not found');
+    }
+
+    res.json({
+      data: {
+        ...user,
+        following: !!following,
+        followsMe: !!followsMe,
+      },
+    });
+  } catch (error) {
     throw error;
   }
 };

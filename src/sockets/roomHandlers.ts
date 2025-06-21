@@ -121,9 +121,18 @@ export const setupRoomHandlers = (io: Server, socket: SocketWithUser) => {
             thumbnailUrl: true,
             duration: true,
             createdBy: true,
+            createdAt: true,
             rotation: true,
             scaleX: true,
             scaleY: true,
+            creator: {
+              select: {
+                id: true,
+                username: true,
+                firstName: true,
+                avatarUrl: true,
+              },
+            },
           },
         }),
       ]);
@@ -210,6 +219,8 @@ export const setupRoomHandlers = (io: Server, socket: SocketWithUser) => {
               thumbnailUrl: element.thumbnailUrl,
               duration: element.duration,
               createdBy: element.createdBy,
+              createdAt: element.createdAt,
+              creator: element.creator,
               rotation: element.rotation,
               scaleX: element.scaleX,
               scaleY: element.scaleY,
@@ -360,6 +371,16 @@ export const setupRoomHandlers = (io: Server, socket: SocketWithUser) => {
           scaleX: scaleX || 1,
           scaleY: scaleY || 1,
         },
+        include: {
+          creator: {
+            select: {
+              id: true,
+              username: true,
+              firstName: true,
+              avatarUrl: true,
+            },
+          },
+        },
       });
 
       console.log(`✅ [Room ${roomId}] Element created with ID: ${element.id}`);
@@ -386,6 +407,8 @@ export const setupRoomHandlers = (io: Server, socket: SocketWithUser) => {
           thumbnailUrl: element.thumbnailUrl,
           duration: element.duration,
           createdBy: element.createdBy,
+          createdAt: element.createdAt,
+          creator: element.creator,
           rotation: element.rotation,
           scaleX: element.scaleX,
           scaleY: element.scaleY,

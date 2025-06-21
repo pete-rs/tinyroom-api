@@ -224,4 +224,22 @@ export class NotificationService {
       },
     });
   }
+
+  /**
+   * Send notification when someone follows you
+   */
+  static async notifyUserFollowed(
+    followerName: string,
+    recipientId: string
+  ): Promise<void> {
+    await this.sendToUser({
+      userId: recipientId,
+      title: 'New Follower',
+      message: `${followerName} started following you`,
+      data: {
+        type: 'user_followed',
+        followerName,
+      },
+    });
+  }
 }

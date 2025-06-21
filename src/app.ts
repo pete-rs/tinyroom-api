@@ -13,6 +13,7 @@ import uploadRoutes from './routes/upload';
 import notificationRoutes from './routes/notifications';
 import horoscopeRoutes from './routes/horoscope';
 import messageRoutes from './routes/messages';
+import followRoutes from './routes/follow';
 
 const app = express();
 
@@ -131,6 +132,7 @@ app.use('/api/upload', uploadRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/horoscope', horoscopeRoutes);
 app.use('/api', messageRoutes);
+app.use('/api', followRoutes);
 
 // Error handling
 app.use(errorHandler as any);

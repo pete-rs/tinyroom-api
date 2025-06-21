@@ -26,6 +26,14 @@ model User {
   messageReactions   MessageReaction[]
   messageReads       MessageRead[]
   
+  // Following relationships
+  followers    Follow[] @relation("UserFollowing") // People who follow me
+  following    Follow[] @relation("UserFollowers") // People I follow
+  
+  // Denormalized counts for performance
+  followersCount  Int @default(0) @map("followers_count")
+  followingCount  Int @default(0) @map("following_count")
+  
   @@map("users")
 }
 
@@ -40,6 +48,7 @@ model Room {
   updatedAt    DateTime @updatedAt @map("updated_at") // Track when room content is updated (elements, name, etc)
   messagesUpdatedAt DateTime? @map("messages_updated_at") // Track when messages were last sent/deleted
   isActive     Boolean  @default(true) @map("is_active")
+  isPublic     Boolean  @default(false) @map("is_public") // Room visibility: false = private (default), true = public
   
   participants RoomParticipant[]
   elements     Element[]
@@ -140,4 +149,18 @@ model MessageRead {
   @@id([messageId, userId])
   @@index([messageId]) // For efficient read receipt queries
   @@map("message_reads")
+}
+
+model Follow {
+  id          String   @id @default(uuid())
+  followerId  String   @map("follower_id")
+  followingId String   @map("following_id")
+  follower    User     @relation("UserFollowers", fields: [followerId], references: [id])
+  following   User     @relation("UserFollowing", fields: [followingId], references: [id])
+  createdAt   DateTime @default(now()) @map("created_at")
+  
+  @@unique([followerId, followingId]) // Prevent duplicate follows
+  @@index([followerId]) // Fast lookup of who I follow
+  @@index([followingId]) // Fast lookup of my followers
+  @@map("follows")
 }

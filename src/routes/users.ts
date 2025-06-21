@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { getMe, updateProfile, searchUsers, getAllUsers, getUsersWithoutRooms } from '../controllers/userController';
+import { getMe, updateProfile, searchUsers, getAllUsers, getUsersWithoutRooms, getUser } from '../controllers/userController';
 import { authMiddleware, requireCompleteProfile } from '../middleware/auth';
 import { asyncHandler } from '../utils/asyncHandler';
 
@@ -13,5 +13,6 @@ router.put('/me', authMiddleware as any, asyncHandler(updateProfile));
 router.get('/search', authMiddleware as any, requireCompleteProfile as any, asyncHandler(searchUsers));
 router.get('/all', authMiddleware as any, requireCompleteProfile as any, asyncHandler(getAllUsers));
 router.get('/without-rooms', authMiddleware as any, requireCompleteProfile as any, asyncHandler(getUsersWithoutRooms));
+router.get('/:userId', authMiddleware as any, requireCompleteProfile as any, asyncHandler(getUser));
 
 export default router;

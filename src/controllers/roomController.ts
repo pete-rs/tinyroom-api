@@ -285,6 +285,40 @@ export const createRoom = async (req: AuthRequest, res: Response) => {
   }
 };
 
+export const testRoomPublicStatus = async (req: AuthRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+
+    // Multiple ways to check the value
+    const prismaFindUnique = await prisma.room.findUnique({
+      where: { id },
+      select: { id: true, name: true, isPublic: true },
+    });
+
+    const prismaFindFirst = await prisma.room.findFirst({
+      where: { id },
+      select: { id: true, name: true, isPublic: true },
+    });
+
+    const rawQuery = await prisma.$queryRaw<any[]>`
+      SELECT id, name, is_public FROM rooms WHERE id = ${id}
+    `;
+
+    res.json({
+      prismaFindUnique,
+      prismaFindFirst,
+      rawQuery: rawQuery[0] || null,
+      comparison: {
+        findUniqueIsPublic: prismaFindUnique?.isPublic,
+        findFirstIsPublic: prismaFindFirst?.isPublic,
+        rawQueryIsPublic: rawQuery[0]?.is_public,
+      }
+    });
+  } catch (error) {
+    throw error;
+  }
+};
+
 export const getRoom = async (req: AuthRequest, res: Response) => {
   try {
     const { id } = req.params;
@@ -293,7 +327,14 @@ export const getRoom = async (req: AuthRequest, res: Response) => {
       throw new AppError(401, 'UNAUTHORIZED', 'User not authenticated');
     }
 
-    const room = await prisma.room.findFirst({
+    // Debug: Direct database query to check actual value
+    const directQuery = await prisma.$queryRaw<any[]>`
+      SELECT id, name, is_public FROM rooms WHERE id = ${id}
+    `;
+    console.log(`🔍 [GET ROOM ${id}] Direct DB query result:`, directQuery);
+
+    // First try to find the room with user as participant
+    let room = await prisma.room.findFirst({
       where: {
         id,
         participants: {
@@ -341,9 +382,80 @@ export const getRoom = async (req: AuthRequest, res: Response) => {
       },
     });
 
+    // If not found as participant, check if it's a public room
+    if (!room) {
+      room = await prisma.room.findFirst({
+        where: {
+          id,
+          isPublic: true, // Only allow viewing public rooms if not a participant
+        },
+        include: {
+          creator: {
+            select: userSelect,
+          },
+          nameSetByUser: {
+            select: {
+              id: true,
+              username: true,
+              firstName: true,
+              avatarUrl: true,
+            },
+          },
+          participants: {
+            include: {
+              user: {
+                select: userSelect,
+              },
+            },
+          },
+          elements: {
+            where: {
+              deletedAt: null,
+            },
+            include: {
+              creator: {
+                select: {
+                  id: true,
+                  username: true,
+                  firstName: true,
+                },
+              },
+            },
+            orderBy: {
+              createdAt: 'asc',
+            },
+          },
+        },
+      });
+    }
+
     if (!room) {
       throw new AppError(404, 'ROOM_NOT_FOUND', 'Room not found or access denied');
     }
+
+    // Debug logging to check isPublic value
+    console.log(`🔍 [GET ROOM ${id}] Room from DB:`, {
+      id: room.id,
+      name: room.name,
+      isPublic: room.isPublic,
+      isPublicType: typeof room.isPublic,
+      hasIsPublic: 'isPublic' in room,
+      allKeys: Object.keys(room),
+      rawRoom: JSON.stringify({ id: room.id, isPublic: room.isPublic }),
+    });
+
+    // Debug logging for creator field
+    console.log(`👤 [GET ROOM ${id}] Creator info:`, {
+      createdBy: room.createdBy,
+      creatorExists: !!room.creator,
+      creatorData: room.creator,
+      participantCount: room.participants.length,
+      participants: room.participants.map(p => ({
+        userId: p.userId,
+        username: p.user.username,
+        isCreator: p.userId === room.createdBy,
+      })),
+    });
 
     res.json({
       data: room,
@@ -372,28 +484,42 @@ export const joinRoom = async (req: AuthRequest, res: Response) => {
       throw new AppError(404, 'ROOM_NOT_FOUND', 'Room not found');
     }
 
-    // Room can always be joined by participants
-
     // Check if user is already a participant
     const existingParticipant = room.participants.find(p => p.userId === req.user!.id);
+    
     if (!existingParticipant) {
-      throw new AppError(403, 'NOT_PARTICIPANT', 'You are not a participant in this room');
-    }
-
-    // Update participant to active and update last visit time
-    await prisma.roomParticipant.update({
-      where: {
-        roomId_userId: {
+      // For public rooms, allow non-participants to join
+      if (!room.isPublic) {
+        throw new AppError(403, 'NOT_PARTICIPANT', 'You are not a participant in this room');
+      }
+      
+      // Add user as a new participant to the public room
+      const color = getAvailableColor(room.participants.map(p => p.color));
+      await prisma.roomParticipant.create({
+        data: {
           roomId: id,
           userId: req.user.id,
+          color,
+          isActive: true,
+          lastVisitedAt: new Date(),
         },
-      },
-      data: {
-        isActive: true,
-        leftAt: null,
-        lastVisitedAt: new Date(), // Update last visit timestamp
-      },
-    });
+      });
+    } else {
+      // Update existing participant to active and update last visit time
+      await prisma.roomParticipant.update({
+        where: {
+          roomId_userId: {
+            roomId: id,
+            userId: req.user.id,
+          },
+        },
+        data: {
+          isActive: true,
+          leftAt: null,
+          lastVisitedAt: new Date(), // Update last visit timestamp
+        },
+      });
+    }
 
     // Room updatedAt will be automatically updated by Prisma
 
@@ -597,6 +723,72 @@ export const getRoomElements = async (req: AuthRequest, res: Response) => {
 
     res.json({
       data: elements,
+    });
+  } catch (error) {
+    throw error;
+  }
+};
+
+export const updateRoomVisibility = async (req: AuthRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { isPublic } = req.body;
+
+    if (!req.user) {
+      throw new AppError(401, 'UNAUTHORIZED', 'User not authenticated');
+    }
+
+    if (typeof isPublic !== 'boolean') {
+      throw new AppError(400, 'INVALID_REQUEST', 'isPublic must be a boolean value');
+    }
+
+    // Check if user is the creator of the room
+    const room = await prisma.room.findFirst({
+      where: {
+        id,
+        createdBy: req.user.id,
+      },
+    });
+
+    if (!room) {
+      throw new AppError(403, 'FORBIDDEN', 'Only the room creator can change visibility');
+    }
+
+    // Update room visibility
+    const updatedRoom = await prisma.room.update({
+      where: { id },
+      data: { isPublic },
+      include: {
+        creator: {
+          select: userSelect,
+        },
+        nameSetByUser: {
+          select: {
+            id: true,
+            username: true,
+            firstName: true,
+            avatarUrl: true,
+          },
+        },
+        participants: {
+          include: {
+            user: {
+              select: userSelect,
+            },
+          },
+        },
+      },
+    });
+
+    // Emit socket event to all participants
+    socketService.emitToRoom(id, 'room:visibility-changed', {
+      roomId: id,
+      isPublic,
+      changedBy: req.user.id,
+    });
+
+    res.json({
+      data: updatedRoom,
     });
   } catch (error) {
     throw error;
@@ -900,6 +1092,7 @@ export const getMyRooms = async (req: AuthRequest, res: Response) => {
       messages_updated_at: Date | null;
       created_by: string;
       name_set_by: string | null;
+      is_public: boolean;
       is_creator: boolean;
       element_count: bigint;
       unread_elements: bigint;
@@ -917,6 +1110,7 @@ export const getMyRooms = async (req: AuthRequest, res: Response) => {
         r.messages_updated_at,
         r.created_by,
         r.name_set_by,
+        r.is_public,
         (r.created_by = ${req.user.id}) as is_creator,
         COUNT(DISTINCT e.id) FILTER (WHERE e.deleted_at IS NULL) as element_count,
         COUNT(DISTINCT e.id) FILTER (WHERE e.deleted_at IS NULL AND e.created_at > rp.last_visited_at AND e.created_by != ${req.user.id}) as unread_elements,
@@ -960,9 +1154,27 @@ export const getMyRooms = async (req: AuthRequest, res: Response) => {
       JOIN room_participants rp ON rp.room_id = r.id AND rp.user_id = ${req.user.id}
       LEFT JOIN elements e ON e.room_id = r.id
       LEFT JOIN messages m ON m.room_id = r.id
-      GROUP BY r.id, r.name, r.created_at, r.updated_at, r.messages_updated_at, r.created_by, r.name_set_by, rp.last_visited_at
+      GROUP BY r.id, r.name, r.created_at, r.updated_at, r.messages_updated_at, r.created_by, r.name_set_by, r.is_public, rp.last_visited_at
       ORDER BY GREATEST(r.updated_at, COALESCE(r.messages_updated_at, r.updated_at)) DESC
     `;
+
+    // Debug logging for first room
+    if (roomsData.length > 0) {
+      console.log(`🔍 [GET MY ROOMS] First room raw data:`, {
+        id: roomsData[0].id,
+        name: roomsData[0].name,
+        is_public: roomsData[0].is_public,
+        is_public_type: typeof roomsData[0].is_public,
+        all_keys: Object.keys(roomsData[0]),
+      });
+      
+      console.log(`👤 [GET MY ROOMS] Creator data for first room:`, {
+        created_by: roomsData[0].created_by,
+        creator_data: roomsData[0].creator_data,
+        creator_data_type: typeof roomsData[0].creator_data,
+        is_creator: roomsData[0].is_creator,
+      });
+    }
 
     // Transform the raw data into the expected format
     const roomsWithUnreadCount = roomsData.map(room => {
@@ -976,6 +1188,7 @@ export const getMyRooms = async (req: AuthRequest, res: Response) => {
         messagesUpdatedAt: room.messages_updated_at,
         createdBy: room.created_by,
         nameSetBy: room.name_set_by,
+        isPublic: room.is_public,
         creator: room.creator_data,
         nameSetByUser: room.name_set_by_user_data,
         isCreator: room.is_creator,

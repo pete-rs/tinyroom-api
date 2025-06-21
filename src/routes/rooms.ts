@@ -8,12 +8,14 @@ import {
   getRoomElements,
   getRoomsGroupedByPerson,
   updateRoomName,
+  updateRoomVisibility,
   getMyRooms,
   deleteRoom,
   permanentlyLeaveRoom,
   deleteElement,
   addParticipants,
   removeParticipants,
+  testRoomPublicStatus,
 } from '../controllers/roomController';
 import { authMiddleware, requireCompleteProfile } from '../middleware/auth';
 import { asyncHandler } from '../utils/asyncHandler';
@@ -35,7 +37,9 @@ router.post('/', asyncHandler(createRoom));
 
 // Room-specific endpoints
 router.get('/:id', asyncHandler(getRoom));
+router.get('/:id/test-public', asyncHandler(testRoomPublicStatus)); // Debug endpoint
 router.put('/:id/name', asyncHandler(updateRoomName));
+router.put('/:id/visibility', asyncHandler(updateRoomVisibility)); // Toggle public/private
 router.post('/:id/join', asyncHandler(joinRoom));
 router.post('/:id/leave', asyncHandler(leaveRoom)); // Temporary leave (mark as inactive)
 router.delete('/:id/leave', asyncHandler(permanentlyLeaveRoom)); // Permanent leave (remove participant)
