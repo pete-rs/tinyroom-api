@@ -2,6 +2,7 @@ import { Server, Socket } from 'socket.io';
 import { prisma } from '../config/prisma';
 import { ElementType } from '@prisma/client';
 import { NotificationService } from '../services/notificationService';
+import { getElementsWithReactions } from '../utils/elementHelpers';
 
 interface SocketWithUser extends Socket {
   userId: string;
@@ -101,40 +102,8 @@ export const setupRoomHandlers = (io: Server, socket: SocketWithUser) => {
             },
           },
         }),
-        // Get room elements
-        prisma.element.findMany({
-          where: {
-            roomId: roomId,
-            deletedAt: null,
-          },
-          select: {
-            id: true,
-            type: true,
-            positionX: true,
-            positionY: true,
-            width: true,
-            height: true,
-            content: true,
-            imageUrl: true,
-            audioUrl: true,
-            videoUrl: true,
-            thumbnailUrl: true,
-            duration: true,
-            createdBy: true,
-            createdAt: true,
-            rotation: true,
-            scaleX: true,
-            scaleY: true,
-            creator: {
-              select: {
-                id: true,
-                username: true,
-                firstName: true,
-                avatarUrl: true,
-              },
-            },
-          },
-        }),
+        // Get room elements with reactions
+        getElementsWithReactions(roomId, socket.userId),
       ]);
 
       if (!participant) {
@@ -198,6 +167,7 @@ export const setupRoomHandlers = (io: Server, socket: SocketWithUser) => {
             rotation: element.rotation,
             scaleX: element.scaleX,
             scaleY: element.scaleY,
+            reactions: element.reactions,
           })),
         });
         
@@ -224,6 +194,7 @@ export const setupRoomHandlers = (io: Server, socket: SocketWithUser) => {
               rotation: element.rotation,
               scaleX: element.scaleX,
               scaleY: element.scaleY,
+              reactions: element.reactions,
             },
           });
         });
@@ -715,6 +686,15 @@ export const setupRoomHandlers = (io: Server, socket: SocketWithUser) => {
       console.error('Error handling element transform:', error);
       socket.emit('error', { message: 'Failed to transform element' });
     }
+  });
+
+  // DEPRECATED: Direct socket reaction toggle - clients should use REST API
+  socket.on('element:reaction:toggle', async (data: { roomId: string; elementId: string }) => {
+    console.log(`⚠️ [Room ${data.roomId}] Client attempted to use deprecated socket reaction toggle`);
+    socket.emit('error', { 
+      message: 'Please use REST API endpoint POST /api/rooms/:roomId/elements/:elementId/reactions/toggle',
+      code: 'USE_REST_API'
+    });
   });
 
   socket.on('room:clear', async (data: RoomClearData) => {

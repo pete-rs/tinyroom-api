@@ -203,6 +203,32 @@ export class NotificationService {
   }
 
   /**
+   * Send notification when someone reacts to your element
+   */
+  static async notifyElementReaction(
+    reactorName: string,
+    elementCreatorId: string,
+    roomId: string,
+    roomName: string,
+    elementType: 'note' | 'photo' | 'audio' | 'video' | 'link',
+    reactionCount: number
+  ): Promise<void> {
+    await this.sendToUser({
+      userId: elementCreatorId,
+      title: `New reaction on your ${elementType}`,
+      message: `${reactorName} reacted to your ${elementType} in ${roomName}`,
+      data: {
+        type: 'element_reaction',
+        roomId,
+        roomName,
+        elementType,
+        reactorName,
+        totalReactions: reactionCount,
+      },
+    });
+  }
+
+  /**
    * Send notification when a new message is sent
    */
   static async notifyNewMessage(

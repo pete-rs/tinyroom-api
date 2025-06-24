@@ -25,6 +25,7 @@ model User {
   messages           Message[]
   messageReactions   MessageReaction[]
   messageReads       MessageRead[]
+  elementReactions   ElementReaction[]
   
   // Following relationships
   followers    Follow[] @relation("UserFollowing") // People who follow me
@@ -98,6 +99,8 @@ model Element {
   updatedAt  DateTime  @updatedAt @map("updated_at")
   deletedAt  DateTime? @map("deleted_at")
   
+  reactions  ElementReaction[]
+  
   @@map("elements")
 }
 
@@ -163,4 +166,22 @@ model Follow {
   @@index([followerId]) // Fast lookup of who I follow
   @@index([followingId]) // Fast lookup of my followers
   @@map("follows")
+}
+
+model ElementReaction {
+  id         String       @id @default(uuid())
+  elementId  String       @map("element_id")
+  element    Element      @relation(fields: [elementId], references: [id], onDelete: Cascade)
+  userId     String       @map("user_id")
+  user       User         @relation(fields: [userId], references: [id])
+  type       ReactionType @default(HEART)
+  createdAt  DateTime     @default(now()) @map("created_at")
+  
+  @@unique([elementId, userId]) // One reaction per user per element
+  @@index([elementId, createdAt]) // For efficient top reactors query
+  @@map("element_reactions")
+}
+
+enum ReactionType {
+  HEART     // ❤️
 }

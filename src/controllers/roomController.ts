@@ -8,6 +8,7 @@ import { NotificationService } from '../services/notificationService';
 import { userSelect } from '../utils/prismaSelects';
 import { socketService } from '../services/socketService';
 import { generateRoomColors } from '../utils/roomColors';
+import { getElementsWithReactions } from '../utils/elementHelpers';
 
 export const getRooms = async (req: AuthRequest, res: Response) => {
   try {
@@ -362,23 +363,6 @@ export const getRoom = async (req: AuthRequest, res: Response) => {
             },
           },
         },
-        elements: {
-          where: {
-            deletedAt: null,
-          },
-          include: {
-            creator: {
-              select: {
-                id: true,
-                username: true,
-                firstName: true,
-              },
-            },
-          },
-          orderBy: {
-            createdAt: 'asc',
-          },
-        },
       },
     });
 
@@ -406,23 +390,6 @@ export const getRoom = async (req: AuthRequest, res: Response) => {
               user: {
                 select: userSelect,
               },
-            },
-          },
-          elements: {
-            where: {
-              deletedAt: null,
-            },
-            include: {
-              creator: {
-                select: {
-                  id: true,
-                  username: true,
-                  firstName: true,
-                },
-              },
-            },
-            orderBy: {
-              createdAt: 'asc',
             },
           },
         },
@@ -457,8 +424,14 @@ export const getRoom = async (req: AuthRequest, res: Response) => {
       })),
     });
 
+    // Fetch elements with reactions
+    const elements = await getElementsWithReactions(room.id, req.user.id);
+
     res.json({
-      data: room,
+      data: {
+        ...room,
+        elements,
+      },
     });
   } catch (error) {
     throw error;
