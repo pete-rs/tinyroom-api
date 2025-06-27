@@ -15,6 +15,7 @@ import horoscopeRoutes from './routes/horoscope';
 import messageRoutes from './routes/messages';
 import followRoutes from './routes/follow';
 import reactionRoutes from './routes/reactions';
+import commentRoutes from './routes/comments';
 
 const app = express();
 
@@ -135,6 +136,7 @@ app.use('/api/horoscope', horoscopeRoutes);
 app.use('/api', messageRoutes);
 app.use('/api', followRoutes);
 app.use('/api', reactionRoutes);
+app.use('/api', commentRoutes);
 
 // Error handling
 app.use(errorHandler as any);

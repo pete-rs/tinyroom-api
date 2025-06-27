@@ -168,9 +168,55 @@ export const authMiddleware = async (
         );
       });
 
+      // Log the entire decoded JWT payload for debugging
+      console.log('Full JWT payload:', JSON.stringify(decoded, null, 2));
+      console.log('JWT claims:', {
+        sub: decoded.sub,
+        email: decoded.email,
+        email_verified: decoded.email_verified,
+        iss: decoded.iss,
+        aud: decoded.aud,
+        iat: decoded.iat,
+        exp: decoded.exp,
+        // Log any custom claims
+        ...Object.keys(decoded).reduce((acc, key) => {
+          if (!['sub', 'email', 'email_verified', 'iss', 'aud', 'iat', 'exp'].includes(key)) {
+            acc[key] = decoded[key];
+          }
+          return acc;
+        }, {} as any)
+      });
+      
       req.auth = decoded as { sub: string; [key: string]: any };
       auth0Id = decoded.sub!;
       email = decoded.email;
+      
+      // If email is missing from JWT (common with magic link), fetch from userinfo
+      if (!email && decoded.scope?.includes('email')) {
+        console.log('Email missing from JWT, fetching from userinfo endpoint...');
+        try {
+          const userInfoResponse = await fetch(
+            `https://${config.auth0.domain}/userinfo`,
+            {
+              headers: {
+                Authorization: `Bearer ${token}`,
+              },
+            }
+          );
+          
+          if (userInfoResponse.ok) {
+            const userInfo = await userInfoResponse.json();
+            console.log('UserInfo response:', JSON.stringify(userInfo, null, 2));
+            email = userInfo.email;
+            req.auth.email = email;
+            req.auth.email_verified = userInfo.email_verified;
+          } else {
+            console.error('Failed to fetch userinfo:', userInfoResponse.status);
+          }
+        } catch (error) {
+          console.error('Error fetching userinfo:', error);
+        }
+      }
       
     } else {
       // Handle opaque token
@@ -201,7 +247,7 @@ export const authMiddleware = async (
     }
 
     // Get user from database
-    console.log('Looking up user in database:', { auth0Id });
+    console.log('Looking up user in database:', { auth0Id, email });
     const user = await prisma.user.findUnique({
       where: { auth0Id },
     });
@@ -211,6 +257,10 @@ export const authMiddleware = async (
       req.user = user;
     } else {
       console.log('User not found in database, will need to create profile');
+      // Store email in req.auth for controllers to use
+      if (email && req.auth && !req.auth.email) {
+        req.auth.email = email;
+      }
     }
 
     next();

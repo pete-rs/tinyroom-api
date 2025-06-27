@@ -168,6 +168,12 @@ export const setupRoomHandlers = (io: Server, socket: SocketWithUser) => {
             scaleX: element.scaleX,
             scaleY: element.scaleY,
             reactions: element.reactions,
+            stats: {
+              totalComments: element.comments?.count || 0,
+              totalReactions: element.reactions?.count || 0,
+              hasReacted: element.reactions?.hasReacted || false,
+              topReactors: element.reactions?.topReactors || [],
+            },
           })),
         });
         
@@ -195,6 +201,12 @@ export const setupRoomHandlers = (io: Server, socket: SocketWithUser) => {
               scaleX: element.scaleX,
               scaleY: element.scaleY,
               reactions: element.reactions,
+              stats: {
+                totalComments: element.comments?.count || 0,
+                totalReactions: element.reactions?.count || 0,
+                hasReacted: element.reactions?.hasReacted || false,
+                topReactors: element.reactions?.topReactors || [],
+              },
             },
           });
         });
@@ -383,6 +395,18 @@ export const setupRoomHandlers = (io: Server, socket: SocketWithUser) => {
           rotation: element.rotation,
           scaleX: element.scaleX,
           scaleY: element.scaleY,
+          reactions: {
+            count: 0,
+            hasReacted: false,
+            userEmoji: null,
+            topReactors: [],
+          },
+          stats: {
+            totalComments: 0,
+            totalReactions: 0,
+            hasReacted: false,
+            topReactors: [],
+          },
         },
       };
       

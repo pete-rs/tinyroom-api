@@ -26,6 +26,8 @@ model User {
   messageReactions   MessageReaction[]
   messageReads       MessageRead[]
   elementReactions   ElementReaction[]
+  elementComments    ElementComment[]
+  commentLikes       CommentLike[]
   
   // Following relationships
   followers    Follow[] @relation("UserFollowing") // People who follow me
@@ -54,6 +56,7 @@ model Room {
   participants RoomParticipant[]
   elements     Element[]
   messages     Message[]
+  comments     ElementComment[]
   
   @@map("rooms")
 }
@@ -100,6 +103,7 @@ model Element {
   deletedAt  DateTime? @map("deleted_at")
   
   reactions  ElementReaction[]
+  comments   ElementComment[]
   
   @@map("elements")
 }
@@ -174,7 +178,7 @@ model ElementReaction {
   element    Element      @relation(fields: [elementId], references: [id], onDelete: Cascade)
   userId     String       @map("user_id")
   user       User         @relation(fields: [userId], references: [id])
-  type       ReactionType @default(HEART)
+  emoji      String       @map("emoji") // Any emoji character(s)
   createdAt  DateTime     @default(now()) @map("created_at")
   
   @@unique([elementId, userId]) // One reaction per user per element
@@ -182,6 +186,37 @@ model ElementReaction {
   @@map("element_reactions")
 }
 
-enum ReactionType {
-  HEART     // ❤️
+model ElementComment {
+  id         String        @id @default(uuid())
+  roomId     String        @map("room_id")
+  room       Room          @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  elementId  String        @map("element_id")
+  element    Element       @relation(fields: [elementId], references: [id], onDelete: Cascade)
+  userId     String        @map("user_id")
+  user       User          @relation(fields: [userId], references: [id])
+  content    String        @db.VarChar(140) // Max 140 characters
+  createdAt  DateTime      @default(now()) @map("created_at")
+  updatedAt  DateTime      @updatedAt @map("updated_at")
+  deletedAt  DateTime?     @map("deleted_at") // Soft delete
+  
+  likes      CommentLike[] // Likes on this comment
+  
+  @@index([elementId, createdAt(sort: Desc)]) // For paginated queries
+  @@index([roomId])
+  @@index([userId])
+  @@map("element_comments")
+}
+
+model CommentLike {
+  id         String         @id @default(uuid())
+  commentId  String         @map("comment_id")
+  comment    ElementComment @relation(fields: [commentId], references: [id], onDelete: Cascade)
+  userId     String         @map("user_id")
+  user       User           @relation(fields: [userId], references: [id])
+  createdAt  DateTime       @default(now()) @map("created_at")
+  
+  @@unique([commentId, userId]) // One like per user per comment
+  @@index([commentId])
+  @@index([userId])
+  @@map("comment_likes")
 }

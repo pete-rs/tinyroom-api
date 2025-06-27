@@ -18,6 +18,22 @@ export const uploadImage = async (req: AuthRequest, res: Response) => {
     throw new AppError(400, 'NO_FILE', 'No file uploaded');
   }
 
+  // For magic link flow, create user if they don't exist yet
+  if (!req.user && req.auth?.sub) {
+    const email = req.auth.email || `${req.auth.sub}@placeholder.com`;
+    console.log('Creating user for upload (magic link flow):', { auth0Id: req.auth.sub, email });
+    
+    req.user = await prisma.user.create({
+      data: {
+        auth0Id: req.auth.sub,
+        email,
+        username: `user_${Date.now()}`,
+        firstName: '',
+        dateOfBirth: new Date(0), // Unix epoch as placeholder
+      },
+    });
+  }
+
   if (!req.user) {
     throw new AppError(401, 'UNAUTHORIZED', 'User not authenticated');
   }

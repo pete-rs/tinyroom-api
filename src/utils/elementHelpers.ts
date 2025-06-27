@@ -2,20 +2,22 @@ import { prisma } from '../config/prisma';
 import { userSelect } from './prismaSelects';
 
 export async function getElementsWithReactions(roomId: string, userId: string) {
-  // Get elements with their reactions
+  // Get elements with their reactions and comment counts
   const elementsWithReactions = await prisma.$queryRaw<any[]>`
     WITH reaction_stats AS (
       SELECT 
         er.element_id,
         COUNT(DISTINCT er.user_id) as reaction_count,
         BOOL_OR(er.user_id = ${userId}) as has_reacted,
+        (SELECT emoji FROM element_reactions WHERE element_id = er.element_id AND user_id = ${userId} LIMIT 1) as user_emoji,
         (
           SELECT json_agg(
             json_build_object(
               'id', u.id,
               'username', u.username,
               'firstName', u.first_name,
-              'avatarUrl', u.avatar_url
+              'avatarUrl', u.avatar_url,
+              'emoji', er2.emoji
             ) ORDER BY er2.created_at
           )
           FROM (
@@ -28,6 +30,14 @@ export async function getElementsWithReactions(roomId: string, userId: string) {
         ) as top_reactors
       FROM element_reactions er
       GROUP BY er.element_id
+    ),
+    comment_stats AS (
+      SELECT 
+        ec.element_id,
+        COUNT(*) as comment_count
+      FROM element_comments ec
+      WHERE ec.deleted_at IS NULL
+      GROUP BY ec.element_id
     )
     SELECT 
       e.id,
@@ -57,10 +67,13 @@ export async function getElementsWithReactions(roomId: string, userId: string) {
       ) as creator,
       COALESCE(rs.reaction_count, 0) as reaction_count,
       COALESCE(rs.has_reacted, false) as has_reacted,
-      COALESCE(rs.top_reactors, '[]'::json) as top_reactors
+      rs.user_emoji,
+      COALESCE(rs.top_reactors, '[]'::json) as top_reactors,
+      COALESCE(cs.comment_count, 0) as comment_count
     FROM elements e
     JOIN users creator ON creator.id = e.created_by
     LEFT JOIN reaction_stats rs ON rs.element_id = e.id
+    LEFT JOIN comment_stats cs ON cs.element_id = e.id
     WHERE e.room_id = ${roomId} AND e.deleted_at IS NULL
     ORDER BY e.created_at ASC
   `;
@@ -90,8 +103,11 @@ export async function getElementsWithReactions(roomId: string, userId: string) {
     reactions: {
       count: Number(element.reaction_count),
       hasReacted: element.has_reacted,
-      userReaction: element.has_reacted ? 'heart' : null,
+      userEmoji: element.user_emoji || null,
       topReactors: element.top_reactors || [],
+    },
+    comments: {
+      count: Number(element.comment_count),
     },
   }));
 }

@@ -5,7 +5,9 @@ import { AppError } from '../middleware/errorHandler';
 
 export const verifyAuth = async (req: AuthRequest, res: Response) => {
   console.log('=== VERIFY AUTH ENDPOINT CALLED ===');
-  console.log('Auth data:', req.auth);
+  console.log('Auth data:', JSON.stringify(req.auth, null, 2));
+  console.log('Auth token sub:', req.auth?.sub);
+  console.log('Auth token email:', req.auth?.email);
   console.log('Existing user:', req.user ? 'Yes' : 'No');
   
   try {
@@ -58,16 +60,30 @@ export const verifyAuth = async (req: AuthRequest, res: Response) => {
         profileComplete,
       },
     });
-  } catch (error) {
+  } catch (error: any) {
+    console.error('Error in completeProfile:', {
+      error: error.message,
+      code: error.code,
+      auth0Id: req.auth?.sub,
+      requestBody: req.body
+    });
     throw error;
   }
 };
 
 export const completeProfile = async (req: AuthRequest, res: Response) => {
   try {
+    console.log('=== COMPLETE PROFILE ENDPOINT CALLED ===');
+    console.log('Request body:', JSON.stringify(req.body, null, 2));
+    console.log('Auth token data:', JSON.stringify(req.auth, null, 2));
+    console.log('Auth sub:', req.auth?.sub);
+    console.log('Auth email:', req.auth?.email);
+    console.log('User from middleware:', req.user ? `Found (ID: ${req.user.id})` : 'Not found');
+    
     let { username, firstName, dateOfBirth, avatarUrl } = req.body;
 
     if (!req.auth?.sub) {
+      console.error('No auth.sub found in request');
       throw new AppError(401, 'UNAUTHORIZED', 'Invalid auth token');
     }
 
@@ -106,15 +122,47 @@ export const completeProfile = async (req: AuthRequest, res: Response) => {
       throw new AppError(409, 'USERNAME_TAKEN', 'Username is already taken');
     }
 
-    const user = await prisma.user.update({
+    // First check if user exists, create if not (for magic link flow)
+    console.log('Checking if user exists with auth0Id:', req.auth.sub);
+    let user = await prisma.user.findUnique({
       where: { auth0Id: req.auth.sub },
-      data: {
+    });
+
+    if (!user) {
+      console.log('User not found, creating new user for magic link flow');
+      // Extract email from token or use a placeholder
+      const email = req.auth.email || `${req.auth.sub}@placeholder.com`;
+      console.log('Using email for new user:', email);
+      console.log('Creating user with data:', {
+        auth0Id: req.auth.sub,
+        email,
         username,
         firstName,
-        dateOfBirth: dob,
-        avatarUrl: avatarUrl || null, // Optional avatar URL
-      },
-    });
+        dateOfBirth: dob.toISOString(),
+        avatarUrl: avatarUrl || null
+      });
+      
+      user = await prisma.user.create({
+        data: {
+          auth0Id: req.auth.sub,
+          email,
+          username,
+          firstName,
+          dateOfBirth: dob,
+          avatarUrl: avatarUrl || null,
+        },
+      });
+    } else {
+      user = await prisma.user.update({
+        where: { auth0Id: req.auth.sub },
+        data: {
+          username,
+          firstName,
+          dateOfBirth: dob,
+          avatarUrl: avatarUrl || null,
+        },
+      });
+    }
 
     console.log(`Profile completed for user ${user.id}: ${username}`);
 
@@ -124,9 +172,37 @@ export const completeProfile = async (req: AuthRequest, res: Response) => {
         profileComplete: true,
       },
     });
-  } catch (error) {
+  } catch (error: any) {
+    console.error('Error in completeProfile:', {
+      error: error.message,
+      code: error.code,
+      auth0Id: req.auth?.sub,
+      requestBody: req.body
+    });
     throw error;
   }
+};
+
+// Debug endpoint to see what Auth0 sends
+export const debugAuth = async (req: AuthRequest, res: Response) => {
+  console.log('=== DEBUG AUTH ENDPOINT ===');
+  console.log('Full auth object:', JSON.stringify(req.auth, null, 2));
+  console.log('User from DB:', req.user ? {
+    id: req.user.id,
+    auth0Id: req.user.auth0Id,
+    email: req.user.email,
+    username: req.user.username
+  } : 'Not found');
+  
+  res.json({
+    auth: req.auth,
+    userExists: !!req.user,
+    user: req.user ? {
+      id: req.user.id,
+      username: req.user.username,
+      email: req.user.email
+    } : null
+  });
 };
 
 export const checkUsername = async (req: AuthRequest, res: Response) => {
@@ -171,7 +247,13 @@ export const checkUsername = async (req: AuthRequest, res: Response) => {
         reason: existingUser ? 'Username is already taken' : null,
       },
     });
-  } catch (error) {
+  } catch (error: any) {
+    console.error('Error in completeProfile:', {
+      error: error.message,
+      code: error.code,
+      auth0Id: req.auth?.sub,
+      requestBody: req.body
+    });
     throw error;
   }
 };

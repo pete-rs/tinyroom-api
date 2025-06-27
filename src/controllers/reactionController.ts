@@ -6,50 +6,38 @@ import { userSelect } from '../utils/prismaSelects';
 import { socketService } from '../services/socketService';
 import { NotificationService } from '../services/notificationService';
 
-export const toggleReaction = async (req: AuthRequest, res: Response) => {
+/**
+ * Add or update a reaction to an element
+ * POST /api/reactions/elements/:elementId
+ * Body: { emoji: "❤️" }
+ */
+export const addReaction = async (req: AuthRequest, res: Response) => {
   try {
-    const { roomId, elementId } = req.params;
+    const { elementId } = req.params;
+    const { emoji } = req.body;
 
     if (!req.user) {
       throw new AppError(401, 'UNAUTHORIZED', 'User not authenticated');
     }
 
-    // Verify user has access to room
-    const room = await prisma.room.findFirst({
-      where: {
-        id: roomId,
-        OR: [
-          {
-            participants: {
-              some: {
-                userId: req.user.id,
-              },
-            },
-          },
-          {
-            isPublic: true,
-          },
-        ],
-      },
-      include: {
-        participants: true,
-      },
-    });
-
-    if (!room) {
-      throw new AppError(403, 'FORBIDDEN', 'You do not have access to this room');
+    if (!emoji || typeof emoji !== 'string') {
+      throw new AppError(400, 'INVALID_REQUEST', 'Emoji is required');
     }
 
-    // Verify element exists and belongs to this room
+    // Verify element exists and get room info
     const element = await prisma.element.findFirst({
       where: {
         id: elementId,
-        roomId,
         deletedAt: null,
       },
       include: {
         creator: {
           select: userSelect,
+        },
+        room: {
+          include: {
+            participants: true,
+          },
         },
       },
     });
@@ -58,70 +46,60 @@ export const toggleReaction = async (req: AuthRequest, res: Response) => {
       throw new AppError(404, 'NOT_FOUND', 'Element not found');
     }
 
-    // Store userId to avoid TypeScript issues in transaction
+    // Verify user has access to room
+    const isParticipant = element.room.participants.some(p => p.userId === req.user!.id);
+    if (!isParticipant && !element.room.isPublic) {
+      throw new AppError(403, 'FORBIDDEN', 'You do not have access to this room');
+    }
+
+    // Store userId to avoid TypeScript issues
     const userId = req.user.id;
 
-    // Use a transaction to handle the toggle atomically
-    const result = await prisma.$transaction(async (tx) => {
-      // Check if user already reacted
-      const existingReaction = await tx.elementReaction.findUnique({
+    // Check if user already reacted
+    const existingReaction = await prisma.elementReaction.findUnique({
+      where: {
+        elementId_userId: {
+          elementId,
+          userId,
+        },
+      },
+    });
+
+    let reaction;
+    let action: 'added' | 'updated';
+
+    if (existingReaction) {
+      // Update existing reaction with new emoji
+      reaction = await prisma.elementReaction.update({
         where: {
-          elementId_userId: {
-            elementId,
-            userId,
+          id: existingReaction.id,
+        },
+        data: {
+          emoji,
+        },
+        include: {
+          user: {
+            select: userSelect,
           },
         },
       });
-
-      if (existingReaction) {
-        // Remove reaction
-        await tx.elementReaction.delete({
-          where: {
-            id: existingReaction.id,
+      action = 'updated';
+    } else {
+      // Create new reaction
+      reaction = await prisma.elementReaction.create({
+        data: {
+          elementId,
+          userId,
+          emoji,
+        },
+        include: {
+          user: {
+            select: userSelect,
           },
-        });
-        return { action: 'removed' as const, reaction: null };
-      } else {
-        try {
-          // Try to add reaction
-          const newReaction = await tx.elementReaction.create({
-            data: {
-              elementId,
-              userId,
-              type: 'HEART',
-            },
-            include: {
-              user: {
-                select: userSelect,
-              },
-            },
-          });
-          return { action: 'added' as const, reaction: newReaction };
-        } catch (error: any) {
-          // If we get a unique constraint error, it means the reaction was just added
-          // (likely by the socket handler), so we should fetch it and return as added
-          if (error.code === 'P2002') {
-            const existingReaction = await tx.elementReaction.findUnique({
-              where: {
-                elementId_userId: {
-                  elementId,
-                  userId,
-                },
-              },
-              include: {
-                user: {
-                  select: userSelect,
-                },
-              },
-            });
-            return { action: 'added' as const, reaction: existingReaction };
-          }
-          throw error;
-        }
-      }
-    });
-
-    const { action, reaction } = result;
+        },
+      });
+      action = 'added';
+    }
 
     // Get updated stats
     const [totalReactions, topReactors] = await Promise.all([
@@ -142,22 +120,25 @@ export const toggleReaction = async (req: AuthRequest, res: Response) => {
 
     const elementStats = {
       totalReactions,
-      hasReacted: action === 'added',
-      topReactors: topReactors.map(r => r.user),
+      hasReacted: true,
+      topReactors: topReactors.map(r => ({
+        ...r.user,
+        emoji: r.emoji,
+      })),
     };
 
     // Prepare response
     const response = {
       data: {
         action,
-        reaction: reaction ? {
+        reaction: {
           id: reaction.id,
           elementId: reaction.elementId,
           userId: reaction.userId,
-          type: 'heart',
+          emoji: reaction.emoji,
           createdAt: reaction.createdAt,
           user: reaction.user,
-        } : null,
+        },
         elementStats,
       },
     };
@@ -169,41 +150,33 @@ export const toggleReaction = async (req: AuthRequest, res: Response) => {
     setImmediate(async () => {
       try {
         // Emit socket events
-        if (action === 'added' && reaction) {
-          socketService.emitToRoom(roomId, 'element:reaction:added', {
-            elementId,
-            reaction: {
-              userId: reaction.userId,
-              type: 'heart',
-              user: reaction.user,
-            },
-            stats: {
-              totalCount: totalReactions,
-              topReactors: topReactors.map(r => r.user),
-            },
-          });
+        const eventType = action === 'updated' ? 'element:reaction:updated' : 'element:reaction:added';
+        socketService.emitToRoom(element.room.id, eventType, {
+          elementId,
+          reaction: {
+            userId: reaction.userId,
+            emoji: reaction.emoji,
+            user: reaction.user,
+          },
+          stats: {
+            totalCount: totalReactions,
+            topReactors: topReactors.map(r => ({
+              ...r.user,
+              emoji: r.emoji,
+            })),
+          },
+        });
 
-          // Send push notification (not for self-reactions)
-          if (element.createdBy !== req.user!.id) {
-            await NotificationService.notifyElementReaction(
-              req.user!.firstName || req.user!.username,
-              element.createdBy,
-              roomId,
-              room.name,
-              element.type.toLowerCase() as 'note' | 'photo' | 'audio' | 'video' | 'link',
-              totalReactions
-            );
-          }
-        } else {
-          socketService.emitToRoom(roomId, 'element:reaction:removed', {
-            elementId,
-            userId: req.user!.id,
-            type: 'heart',
-            stats: {
-              totalCount: totalReactions,
-              topReactors: topReactors.map(r => r.user),
-            },
-          });
+        // Send push notification for new reactions (not for self-reactions or updates)
+        if (action === 'added' && element.createdBy !== userId) {
+          await NotificationService.notifyElementReaction(
+            req.user!.firstName || req.user!.username,
+            element.createdBy,
+            element.room.id,
+            element.room.name,
+            element.type.toLowerCase() as 'note' | 'photo' | 'audio' | 'video' | 'link',
+            totalReactions
+          );
         }
       } catch (error) {
         console.error('Error in reaction background tasks:', error);
@@ -214,34 +187,153 @@ export const toggleReaction = async (req: AuthRequest, res: Response) => {
   }
 };
 
-export const getElementReactions = async (req: AuthRequest, res: Response) => {
+/**
+ * Remove a reaction from an element
+ * DELETE /api/reactions/elements/:elementId
+ */
+export const removeReaction = async (req: AuthRequest, res: Response) => {
   try {
-    const { roomId, elementId } = req.params;
+    const { elementId } = req.params;
 
     if (!req.user) {
       throw new AppError(401, 'UNAUTHORIZED', 'User not authenticated');
     }
 
-    // Verify user has access to room
-    const room = await prisma.room.findFirst({
+    // Verify element exists and get room info
+    const element = await prisma.element.findFirst({
       where: {
-        id: roomId,
-        OR: [
-          {
-            participants: {
-              some: {
-                userId: req.user.id,
-              },
-            },
+        id: elementId,
+        deletedAt: null,
+      },
+      include: {
+        room: {
+          include: {
+            participants: true,
           },
-          {
-            isPublic: true,
-          },
-        ],
+        },
       },
     });
 
-    if (!room) {
+    if (!element) {
+      throw new AppError(404, 'NOT_FOUND', 'Element not found');
+    }
+
+    // Verify user has access to room
+    const isParticipant = element.room.participants.some(p => p.userId === req.user!.id);
+    if (!isParticipant && !element.room.isPublic) {
+      throw new AppError(403, 'FORBIDDEN', 'You do not have access to this room');
+    }
+
+    const userId = req.user.id;
+
+    // Check if reaction exists
+    const existingReaction = await prisma.elementReaction.findUnique({
+      where: {
+        elementId_userId: {
+          elementId,
+          userId,
+        },
+      },
+    });
+
+    if (!existingReaction) {
+      throw new AppError(404, 'NOT_FOUND', 'Reaction not found');
+    }
+
+    // Delete the reaction
+    await prisma.elementReaction.delete({
+      where: {
+        id: existingReaction.id,
+      },
+    });
+
+    // Get updated stats
+    const [totalReactions, topReactors] = await Promise.all([
+      prisma.elementReaction.count({
+        where: { elementId },
+      }),
+      prisma.elementReaction.findMany({
+        where: { elementId },
+        take: 3,
+        orderBy: { createdAt: 'asc' },
+        include: {
+          user: {
+            select: userSelect,
+          },
+        },
+      }),
+    ]);
+
+    const response = {
+      data: {
+        message: 'Reaction removed successfully',
+        elementStats: {
+          totalReactions,
+          hasReacted: false,
+          topReactors: topReactors.map(r => ({
+            ...r.user,
+            emoji: r.emoji,
+          })),
+        },
+      },
+    };
+
+    // Send response immediately
+    res.json(response);
+
+    // Emit socket event in background
+    setImmediate(() => {
+      socketService.emitToRoom(element.room.id, 'element:reaction:removed', {
+        elementId,
+        userId,
+        stats: {
+          totalCount: totalReactions,
+          topReactors: topReactors.map(r => ({
+            ...r.user,
+            emoji: r.emoji,
+          })),
+        },
+      });
+    });
+  } catch (error) {
+    throw error;
+  }
+};
+
+/**
+ * Get all reactions for an element
+ * GET /api/reactions/elements/:elementId
+ */
+export const getElementReactions = async (req: AuthRequest, res: Response) => {
+  try {
+    const { elementId } = req.params;
+
+    if (!req.user) {
+      throw new AppError(401, 'UNAUTHORIZED', 'User not authenticated');
+    }
+
+    // Verify element exists and user has access
+    const element = await prisma.element.findFirst({
+      where: {
+        id: elementId,
+        deletedAt: null,
+      },
+      include: {
+        room: {
+          include: {
+            participants: true,
+          },
+        },
+      },
+    });
+
+    if (!element) {
+      throw new AppError(404, 'NOT_FOUND', 'Element not found');
+    }
+
+    // Verify user has access to room
+    const isParticipant = element.room.participants.some(p => p.userId === req.user!.id);
+    if (!isParticipant && !element.room.isPublic) {
       throw new AppError(403, 'FORBIDDEN', 'You do not have access to this room');
     }
 
@@ -249,10 +341,6 @@ export const getElementReactions = async (req: AuthRequest, res: Response) => {
     const reactions = await prisma.elementReaction.findMany({
       where: {
         elementId,
-        element: {
-          roomId,
-          deletedAt: null,
-        },
       },
       include: {
         user: {
@@ -265,6 +353,7 @@ export const getElementReactions = async (req: AuthRequest, res: Response) => {
     });
 
     const hasReacted = reactions.some(r => r.userId === req.user!.id);
+    const userReaction = reactions.find(r => r.userId === req.user!.id);
 
     res.json({
       data: {
@@ -275,11 +364,11 @@ export const getElementReactions = async (req: AuthRequest, res: Response) => {
           avatarUrl: r.user.avatarUrl,
           username: r.user.username,
           reactedAt: r.createdAt,
-          reaction: '❤️', // Currently only heart, will expand later
-          type: 'heart', // API type for programmatic use
+          emoji: r.emoji,
         })),
         total: reactions.length,
         hasReacted,
+        userEmoji: userReaction?.emoji || null,
       },
     });
   } catch (error) {

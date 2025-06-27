@@ -229,6 +229,58 @@ export class NotificationService {
   }
 
   /**
+   * Send notification when someone comments on your element
+   */
+  static async notifyElementComment(
+    commenterName: string,
+    elementCreatorId: string,
+    roomId: string,
+    roomName: string,
+    elementType: 'note' | 'photo' | 'audio' | 'video' | 'link',
+    commentText: string
+  ): Promise<void> {
+    const truncatedComment = commentText.length > 50 
+      ? commentText.substring(0, 47) + '...' 
+      : commentText;
+    
+    await this.sendToUser({
+      userId: elementCreatorId,
+      title: `New comment on your ${elementType}`,
+      message: `${commenterName}: ${truncatedComment}`,
+      data: {
+        type: 'element_comment',
+        roomId,
+        roomName,
+        elementType,
+        commenterName,
+      },
+    });
+  }
+
+  /**
+   * Send notification when someone likes your comment
+   */
+  static async notifyCommentLike(
+    likerName: string,
+    commentAuthorId: string,
+    roomId: string,
+    roomName: string,
+    commentText: string
+  ): Promise<void> {
+    await this.sendToUser({
+      userId: commentAuthorId,
+      title: 'Your comment was liked',
+      message: `${likerName} liked your comment "${commentText}"`,
+      data: {
+        type: 'comment_like',
+        roomId,
+        roomName,
+        likerName,
+      },
+    });
+  }
+
+  /**
    * Send notification when a new message is sent
    */
   static async notifyNewMessage(
