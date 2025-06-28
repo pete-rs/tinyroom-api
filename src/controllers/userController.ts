@@ -44,28 +44,109 @@ export const getMe = async (req: AuthRequest, res: Response) => {
 
 export const updateProfile = async (req: AuthRequest, res: Response) => {
   try {
-    let { firstName, dateOfBirth } = req.body;
+    console.log('=== UPDATE PROFILE REQUEST ===');
+    console.log('User ID:', req.user?.id);
+    console.log('Request body:', JSON.stringify(req.body, null, 2));
+    
+    let { firstName, dateOfBirth, username, avatarUrl } = req.body;
 
     if (!req.user) {
       throw new AppError(404, 'USER_NOT_FOUND', 'User not found');
     }
 
-    // Trim firstName if provided
-    if (firstName) {
+    const updateData: any = {};
+
+    // Handle firstName update
+    if (firstName !== undefined) {
       firstName = firstName.trim();
+      if (firstName.length === 0) {
+        throw new AppError(400, 'INVALID_FIRST_NAME', 'First name cannot be empty');
+      }
+      if (firstName.length > 50) {
+        throw new AppError(400, 'INVALID_FIRST_NAME', 'First name must be 50 characters or less');
+      }
+      updateData.firstName = firstName;
     }
 
+    // Handle dateOfBirth update
+    if (dateOfBirth !== undefined) {
+      const dob = new Date(dateOfBirth);
+      const age = (new Date().getTime() - dob.getTime()) / (1000 * 60 * 60 * 24 * 365.25);
+      if (age < 13) {
+        throw new AppError(400, 'AGE_REQUIREMENT', 'You must be at least 13 years old');
+      }
+      updateData.dateOfBirth = dob;
+    }
+
+    // Handle username update
+    if (username !== undefined) {
+      username = username.trim();
+      
+      // Validate username format
+      if (!/^[a-zA-Z0-9_]+$/.test(username)) {
+        throw new AppError(400, 'INVALID_USERNAME', 'Username can only contain letters, numbers, and underscores');
+      }
+      
+      // Validate username length
+      if (username.length < 3 || username.length > 20) {
+        throw new AppError(400, 'INVALID_USERNAME_LENGTH', 'Username must be between 3 and 20 characters');
+      }
+      
+      // Check if username is taken by another user
+      const existingUser = await prisma.user.findUnique({
+        where: { username },
+      });
+      
+      if (existingUser && existingUser.id !== req.user.id) {
+        throw new AppError(409, 'USERNAME_TAKEN', 'Username is already taken');
+      }
+      
+      updateData.username = username;
+    }
+
+    // Handle avatarUrl update
+    if (avatarUrl !== undefined) {
+      // Allow null to remove avatar
+      updateData.avatarUrl = avatarUrl;
+    }
+
+    // Only update if there are changes
+    if (Object.keys(updateData).length === 0) {
+      console.log('No changes detected, returning current user data');
+      const response = {
+        data: req.user,
+      };
+      console.log('=== UPDATE PROFILE RESPONSE (No Changes) ===');
+      console.log('Response:', JSON.stringify(response, null, 2));
+      return res.json(response);
+    }
+
+    console.log('Update data to be applied:', JSON.stringify(updateData, null, 2));
+    
     const updatedUser = await prisma.user.update({
       where: { id: req.user.id },
-      data: {
-        ...(firstName && { firstName }),
-        ...(dateOfBirth && { dateOfBirth: new Date(dateOfBirth) }),
+      data: updateData,
+      select: {
+        id: true,
+        username: true,
+        firstName: true,
+        email: true,
+        avatarUrl: true,
+        dateOfBirth: true,
+        createdAt: true,
+        followersCount: true,
+        followingCount: true,
       },
     });
 
-    res.json({
+    const response = {
       data: updatedUser,
-    });
+    };
+    
+    console.log('=== UPDATE PROFILE RESPONSE ===');
+    console.log('Response:', JSON.stringify(response, null, 2));
+    
+    res.json(response);
   } catch (error) {
     throw error;
   }
