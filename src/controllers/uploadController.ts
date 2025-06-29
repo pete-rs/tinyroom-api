@@ -39,19 +39,28 @@ export const uploadImage = async (req: AuthRequest, res: Response) => {
   }
 
   try {
-    // Upload to Cloudinary directly without resizing for general images
-    const uploadPromise = new Promise<string>((resolve, reject) => {
+    // Upload to Cloudinary with eager transformations for thumbnails
+    const uploadPromise = new Promise<{ imageUrl: string; smallThumbnailUrl: string }>((resolve, reject) => {
       const uploadStream = cloudinary.uploader.upload_stream(
         {
           folder: 'room-elements',
           resource_type: 'image',
           public_id: `image_${req.user!.id}_${Date.now()}`,
+          eager: [
+            { width: 180, height: 180, crop: 'limit', quality: 'auto', format: 'auto' },
+          ],
+          eager_async: false, // Generate synchronously for immediate availability
         },
         (error, result) => {
           if (error) {
             reject(error);
           } else if (result) {
-            resolve(result.secure_url);
+            // Extract the eager transformation URL
+            const smallThumbnailUrl = result.eager?.[0]?.secure_url || result.secure_url;
+            resolve({
+              imageUrl: result.secure_url,
+              smallThumbnailUrl,
+            });
           } else {
             reject(new Error('Upload failed'));
           }
@@ -61,13 +70,18 @@ export const uploadImage = async (req: AuthRequest, res: Response) => {
       uploadStream.end(req.file!.buffer);
     });
 
-    const imageUrl = await uploadPromise;
+    const { imageUrl, smallThumbnailUrl } = await uploadPromise;
 
-    res.json({
+    const response = {
       data: {
         imageUrl,
+        smallThumbnailUrl,
       },
-    });
+    };
+
+    console.log('🖼️ [IMAGE UPLOAD] Response:', JSON.stringify(response, null, 2));
+
+    res.json(response);
   } catch (error) {
     console.error('Image upload error:', error);
     throw new AppError(500, 'UPLOAD_FAILED', 'Failed to upload image');
@@ -214,7 +228,7 @@ export const uploadVideo = async (req: AuthRequest, res: Response) => {
     const duration = req.body.duration ? parseFloat(req.body.duration) : undefined;
 
     // Upload video file to Cloudinary with transformations
-    const uploadPromise = new Promise<{ videoUrl: string; thumbnailUrl: string }>((resolve, reject) => {
+    const uploadPromise = new Promise<{ videoUrl: string; thumbnailUrl: string; smallThumbnailUrl: string }>((resolve, reject) => {
       const timestamp = Date.now();
       const publicId = `video_${req.user!.id}_${timestamp}`;
 
@@ -229,6 +243,11 @@ export const uploadVideo = async (req: AuthRequest, res: Response) => {
             { quality: 'auto:good' }, // Optimize quality
             { fetch_format: 'auto' }, // Auto format selection
           ],
+          eager: [
+            // Generate small thumbnail at 2 seconds
+            { width: 180, height: 180, crop: 'limit', start_offset: '2', format: 'jpg', quality: 'auto' },
+          ],
+          eager_async: false,
         },
         (error, result) => {
           if (error) {
@@ -242,15 +261,23 @@ export const uploadVideo = async (req: AuthRequest, res: Response) => {
               '/video/upload/w_400,h_400,c_limit,so_2,f_jpg/'
             );
 
+            // Get small thumbnail from eager transformation
+            const smallThumbnailUrl = result.eager?.[0]?.secure_url || thumbnailUrl.replace(
+              '/video/upload/w_400,h_400,c_limit,so_2,f_jpg/',
+              '/video/upload/w_180,h_180,c_limit,so_2,f_jpg/'
+            );
+
             console.log('📹 Video uploaded:', {
               videoUrl: result.secure_url,
               thumbnailUrl,
+              smallThumbnailUrl,
               cloudinaryDuration: result.duration,
             });
 
             resolve({
               videoUrl: result.secure_url,
               thumbnailUrl,
+              smallThumbnailUrl,
             });
           } else {
             reject(new Error('Upload failed'));
@@ -261,15 +288,20 @@ export const uploadVideo = async (req: AuthRequest, res: Response) => {
       uploadStream.end(req.file!.buffer);
     });
 
-    const { videoUrl, thumbnailUrl } = await uploadPromise;
+    const { videoUrl, thumbnailUrl, smallThumbnailUrl } = await uploadPromise;
 
-    res.json({
+    const response = {
       data: {
         videoUrl,
         thumbnailUrl,
+        smallThumbnailUrl,
         duration: duration && duration <= 10 ? duration : 10, // Cap at 10 seconds
       },
-    });
+    };
+
+    console.log('🎥 [VIDEO UPLOAD] Response:', JSON.stringify(response, null, 2));
+
+    res.json(response);
   } catch (error) {
     console.error('Video upload error:', error);
     throw new AppError(500, 'UPLOAD_FAILED', 'Failed to upload video');

@@ -9,6 +9,7 @@ import { userSelect } from '../utils/prismaSelects';
 import { socketService } from '../services/socketService';
 import { generateRoomColors } from '../utils/roomColors';
 import { getElementsWithReactions } from '../utils/elementHelpers';
+import { getSmallThumbnailUrl } from '../utils/thumbnailHelpers';
 
 export const getRooms = async (req: AuthRequest, res: Response) => {
   try {
@@ -1074,6 +1075,7 @@ export const getMyRooms = async (req: AuthRequest, res: Response) => {
       participant_data: any; // JSON array of participants
       creator_data: any; // JSON object of creator
       name_set_by_user_data: any; // JSON object of name setter
+      recent_elements: any; // JSON array of recent elements
     }>>`
       SELECT 
         r.id,
@@ -1122,7 +1124,35 @@ export const getMyRooms = async (req: AuthRequest, res: Response) => {
           )
           FROM users setter
           WHERE setter.id = r.name_set_by
-        ) as name_set_by_user_data
+        ) as name_set_by_user_data,
+        (
+          SELECT json_agg(elem_data ORDER BY elem_data->>'createdAt' DESC)
+          FROM (
+            SELECT json_build_object(
+              'id', e2.id,
+              'type', e2.type,
+              'imageUrl', e2.image_url,
+              'videoUrl', e2.video_url,
+              'thumbnailUrl', e2.thumbnail_url,
+              'smallThumbnailUrl', e2.small_thumbnail_url,
+              'audioUrl', e2.audio_url,
+              'createdAt', e2.created_at,
+              'createdBy', json_build_object(
+                'id', u2.id,
+                'username', u2.username,
+                'firstName', u2.first_name,
+                'avatarUrl', u2.avatar_url
+              )
+            ) as elem_data
+            FROM elements e2
+            JOIN users u2 ON u2.id = e2.created_by
+            WHERE e2.room_id = r.id 
+              AND e2.deleted_at IS NULL
+              AND e2.type IN ('PHOTO', 'VIDEO')
+            ORDER BY e2.created_at DESC
+            LIMIT 5
+          ) sub
+        ) as recent_elements
       FROM rooms r
       JOIN room_participants rp ON rp.room_id = r.id AND rp.user_id = ${req.user.id}
       LEFT JOIN elements e ON e.room_id = r.id
@@ -1147,11 +1177,30 @@ export const getMyRooms = async (req: AuthRequest, res: Response) => {
         creator_data_type: typeof roomsData[0].creator_data,
         is_creator: roomsData[0].is_creator,
       });
+
+      console.log(`📸 [GET MY ROOMS] Recent elements for first room:`, {
+        recent_elements_count: roomsData[0].recent_elements?.length || 0,
+        recent_elements: roomsData[0].recent_elements,
+      });
     }
 
     // Transform the raw data into the expected format
     const roomsWithUnreadCount = roomsData.map(room => {
       const unreadCount = Number(room.unread_elements) + Number(room.unread_messages);
+      
+      // Process recent elements to ensure thumbnails
+      const recentElements = room.recent_elements || [];
+      const processedRecentElements = recentElements.map((elem: any) => {
+        // If no smallThumbnailUrl exists, generate one on-the-fly
+        if (!elem.smallThumbnailUrl) {
+          if (elem.type === 'PHOTO' && elem.imageUrl) {
+            elem.smallThumbnailUrl = getSmallThumbnailUrl(elem.imageUrl);
+          } else if (elem.type === 'VIDEO' && (elem.thumbnailUrl || elem.videoUrl)) {
+            elem.smallThumbnailUrl = getSmallThumbnailUrl(elem.thumbnailUrl || elem.videoUrl);
+          }
+        }
+        return elem;
+      });
       
       return {
         id: room.id,
@@ -1174,12 +1223,17 @@ export const getMyRooms = async (req: AuthRequest, res: Response) => {
           messages: Number(room.unread_messages),
           elements: Number(room.unread_elements),
         },
+        recentElements: processedRecentElements,
       };
     });
 
-    res.json({
+    const response = {
       data: roomsWithUnreadCount,
-    });
+    };
+
+    console.log('🏠 [GET MY ROOMS] Response:', JSON.stringify(response, null, 2));
+
+    res.json(response);
   } catch (error) {
     throw error;
   }

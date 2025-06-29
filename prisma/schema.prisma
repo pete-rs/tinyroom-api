@@ -94,7 +94,8 @@ model Element {
   imageUrl   String?   @map("image_url") // For photos
   audioUrl   String?   @map("audio_url") // For audio/voice notes
   videoUrl   String?   @map("video_url") // For videos
-  thumbnailUrl String? @map("thumbnail_url") // For video thumbnails
+  thumbnailUrl String? @map("thumbnail_url") // For video thumbnails (large)
+  smallThumbnailUrl String? @map("small_thumbnail_url") // 180px thumbnail for feed previews
   duration   Float?    // Audio/video duration in seconds
   width      Float
   height     Float
@@ -108,6 +109,7 @@ model Element {
   reactions  ElementReaction[]
   comments   ElementComment[]
   
+  @@index([roomId, createdAt(sort: Desc)]) // For efficient recent elements query
   @@map("elements")
 }
 
