@@ -39,6 +39,12 @@ export const uploadImage = async (req: AuthRequest, res: Response) => {
   }
 
   try {
+    console.log('🖼️ [IMAGE UPLOAD] Starting upload:', {
+      fileSize: req.file.size,
+      mimetype: req.file.mimetype,
+      userId: req.user.id,
+    });
+
     // Upload to Cloudinary with eager transformations for thumbnails
     const uploadPromise = new Promise<{ imageUrl: string; smallThumbnailUrl: string }>((resolve, reject) => {
       const uploadStream = cloudinary.uploader.upload_stream(
@@ -47,7 +53,7 @@ export const uploadImage = async (req: AuthRequest, res: Response) => {
           resource_type: 'image',
           public_id: `image_${req.user!.id}_${Date.now()}`,
           eager: [
-            { width: 180, height: 180, crop: 'limit', quality: 'auto', format: 'auto' },
+            { width: 180, height: 180, crop: 'limit', quality: 'auto' },
           ],
           eager_async: false, // Generate synchronously for immediate availability
         },
@@ -84,6 +90,12 @@ export const uploadImage = async (req: AuthRequest, res: Response) => {
     res.json(response);
   } catch (error) {
     console.error('Image upload error:', error);
+    console.error('Image upload error details:', {
+      error: error instanceof Error ? error.message : error,
+      stack: error instanceof Error ? error.stack : undefined,
+      fileSize: req.file?.size,
+      fileMimetype: req.file?.mimetype,
+    });
     throw new AppError(500, 'UPLOAD_FAILED', 'Failed to upload image');
   }
 };
@@ -245,7 +257,7 @@ export const uploadVideo = async (req: AuthRequest, res: Response) => {
           ],
           eager: [
             // Generate small thumbnail at 2 seconds
-            { width: 180, height: 180, crop: 'limit', start_offset: '2', format: 'jpg', quality: 'auto' },
+            { width: 180, height: 180, crop: 'limit', start_offset: '2', format: 'jpg' },
           ],
           eager_async: false,
         },

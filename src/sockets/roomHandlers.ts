@@ -118,25 +118,19 @@ export const setupRoomHandlers = (io: Server, socket: SocketWithUser) => {
       socket.join(roomId);
       console.log(`✅ [Room ${roomId}] User ${socket.userId} joined socket room`);
 
-      // Update participant status and room timestamp in parallel
-      await Promise.all([
-        prisma.roomParticipant.update({
-          where: {
-            roomId_userId: {
-              roomId,
-              userId: socket.userId,
-            },
+      // Update participant status
+      await prisma.roomParticipant.update({
+        where: {
+          roomId_userId: {
+            roomId,
+            userId: socket.userId,
           },
-          data: { 
-            isActive: true,
-            leftAt: null,
-          },
-        }),
-        prisma.room.update({
-          where: { id: roomId },
-          data: {}, // Empty update will trigger @updatedAt
-        }),
-      ]);
+        },
+        data: { 
+          isActive: true,
+          leftAt: null,
+        },
+      });
 
       // Notify others
       socket.to(roomId).emit('user:joined', {
@@ -368,10 +362,12 @@ export const setupRoomHandlers = (io: Server, socket: SocketWithUser) => {
 
       console.log(`✅ [Room ${roomId}] Element created with ID: ${element.id}`);
 
-      // Update room's updatedAt timestamp IMMEDIATELY (not in background)
+      // Update room's objectAddedAt timestamp when element is created
       await prisma.room.update({
         where: { id: roomId },
-        data: {}, // Empty update will trigger @updatedAt
+        data: {
+          objectAddedAt: new Date(),
+        },
       });
 
       // OPTIMIZATION: Send response immediately for instant feedback
@@ -537,12 +533,6 @@ export const setupRoomHandlers = (io: Server, socket: SocketWithUser) => {
 
       console.log(`✅ [Room ${roomId}] Element ${elementId} updated`);
 
-      // Update room's updatedAt timestamp IMMEDIATELY (not in background)
-      await prisma.room.update({
-        where: { id: roomId },
-        data: {}, // Empty update will trigger @updatedAt
-      });
-
       // OPTIMIZATION: Broadcast immediately
       io.to(roomId).emit('element:updated', {
         elementId,
@@ -593,12 +583,6 @@ export const setupRoomHandlers = (io: Server, socket: SocketWithUser) => {
       });
 
       console.log(`✅ [Room ${roomId}] Element ${elementId} deleted`);
-
-      // Update room's updatedAt timestamp IMMEDIATELY (not in background)
-      await prisma.room.update({
-        where: { id: roomId },
-        data: {}, // Empty update will trigger @updatedAt
-      });
 
       // OPTIMIZATION: Broadcast immediately
       io.to(roomId).emit('element:deleted', { elementId });
@@ -747,12 +731,6 @@ export const setupRoomHandlers = (io: Server, socket: SocketWithUser) => {
           deletedAt: null,
         },
         data: { deletedAt: new Date() },
-      });
-
-      // Update room's updatedAt timestamp
-      await prisma.room.update({
-        where: { id: roomId },
-        data: {}, // Empty update will trigger @updatedAt
       });
 
       // Broadcast to all in room

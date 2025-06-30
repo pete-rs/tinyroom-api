@@ -16,11 +16,11 @@ export function getSmallThumbnailUrl(originalUrl: string | null | undefined, typ
   
   // For square thumbnails (180x180 with center crop)
   if (type === 'square') {
-    return originalUrl.replace('/upload/', '/upload/w_180,h_180,c_fill,g_center,q_auto,f_auto/');
+    return originalUrl.replace('/upload/', '/upload/w_180,h_180,c_fill,g_center,q_auto/');
   }
   
   // For aspect-preserved thumbnails (180px on shortest side)
-  return originalUrl.replace('/upload/', '/upload/w_180,h_180,c_limit,q_auto,f_auto/');
+  return originalUrl.replace('/upload/', '/upload/w_180,h_180,c_limit,q_auto/');
 }
 
 /**
@@ -63,7 +63,6 @@ export const THUMBNAIL_EAGER_OPTIONS = [
     height: 180,
     crop: 'limit',
     quality: 'auto',
-    format: 'auto',
   },
   {
     width: 180,
@@ -71,6 +70,5 @@ export const THUMBNAIL_EAGER_OPTIONS = [
     crop: 'fill',
     gravity: 'center',
     quality: 'auto',
-    format: 'auto',
   }
 ];

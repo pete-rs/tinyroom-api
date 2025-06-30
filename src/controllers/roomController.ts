@@ -1057,6 +1057,8 @@ export const getMyRooms = async (req: AuthRequest, res: Response) => {
       throw new AppError(401, 'UNAUTHORIZED', 'User not authenticated');
     }
 
+    console.log('🏠 [GET MY ROOMS] Starting query for user:', req.user.id);
+
     // Get all rooms with basic info in a single query
     const roomsData = await prisma.$queryRaw<Array<{
       id: string;
@@ -1064,6 +1066,7 @@ export const getMyRooms = async (req: AuthRequest, res: Response) => {
       created_at: Date;
       updated_at: Date;
       messages_updated_at: Date | null;
+      object_added_at: Date;
       created_by: string;
       name_set_by: string | null;
       is_public: boolean;
@@ -1083,6 +1086,7 @@ export const getMyRooms = async (req: AuthRequest, res: Response) => {
         r.created_at,
         r.updated_at,
         r.messages_updated_at,
+        r.object_added_at,
         r.created_by,
         r.name_set_by,
         r.is_public,
@@ -1157,9 +1161,11 @@ export const getMyRooms = async (req: AuthRequest, res: Response) => {
       JOIN room_participants rp ON rp.room_id = r.id AND rp.user_id = ${req.user.id}
       LEFT JOIN elements e ON e.room_id = r.id
       LEFT JOIN messages m ON m.room_id = r.id
-      GROUP BY r.id, r.name, r.created_at, r.updated_at, r.messages_updated_at, r.created_by, r.name_set_by, r.is_public, rp.last_visited_at
-      ORDER BY GREATEST(r.updated_at, COALESCE(r.messages_updated_at, r.updated_at)) DESC
+      GROUP BY r.id, r.name, r.created_at, r.updated_at, r.messages_updated_at, r.object_added_at, r.created_by, r.name_set_by, r.is_public, rp.last_visited_at
+      ORDER BY GREATEST(r.object_added_at, COALESCE(r.messages_updated_at, r.object_added_at)) DESC
     `;
+
+    console.log('🏠 [GET MY ROOMS] Query executed, rooms found:', roomsData.length);
 
     // Debug logging for first room
     if (roomsData.length > 0) {
@@ -1208,6 +1214,7 @@ export const getMyRooms = async (req: AuthRequest, res: Response) => {
         createdAt: room.created_at,
         updatedAt: room.updated_at,
         messagesUpdatedAt: room.messages_updated_at,
+        objectAddedAt: room.object_added_at,
         createdBy: room.created_by,
         nameSetBy: room.name_set_by,
         isPublic: room.is_public,
@@ -1235,6 +1242,7 @@ export const getMyRooms = async (req: AuthRequest, res: Response) => {
 
     res.json(response);
   } catch (error) {
+    console.error('❌ [GET MY ROOMS] Error:', error);
     throw error;
   }
 };
