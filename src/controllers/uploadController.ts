@@ -18,6 +18,9 @@ export const uploadImage = async (req: AuthRequest, res: Response) => {
     throw new AppError(400, 'NO_FILE', 'No file uploaded');
   }
 
+  // Check if we need to preserve transparency (for cutouts)
+  const preserveAlpha = req.body.preserveAlpha === 'true' || req.body.preserveAlpha === true;
+
   // For magic link flow, create user if they don't exist yet
   if (!req.user && req.auth?.sub) {
     const email = req.auth.email || `${req.auth.sub}@placeholder.com`;
@@ -43,20 +46,34 @@ export const uploadImage = async (req: AuthRequest, res: Response) => {
       fileSize: req.file.size,
       mimetype: req.file.mimetype,
       userId: req.user.id,
+      preserveAlpha,
+      format: preserveAlpha ? 'PNG' : 'AUTO',
     });
 
     // Upload to Cloudinary with eager transformations for thumbnails
     const uploadPromise = new Promise<{ imageUrl: string; smallThumbnailUrl: string }>((resolve, reject) => {
+      const uploadConfig: any = {
+        folder: 'room-elements',
+        resource_type: 'image',
+        public_id: `image_${req.user!.id}_${Date.now()}`,
+        eager: [
+          { 
+            width: 180, 
+            height: 180, 
+            crop: 'limit', 
+            quality: 'auto'
+          },
+        ],
+        eager_async: false, // Generate synchronously for immediate availability
+      };
+
+      // Only specify format for PNG (cutouts), let Cloudinary auto-detect for others
+      if (preserveAlpha) {
+        uploadConfig.format = 'png';
+      }
+
       const uploadStream = cloudinary.uploader.upload_stream(
-        {
-          folder: 'room-elements',
-          resource_type: 'image',
-          public_id: `image_${req.user!.id}_${Date.now()}`,
-          eager: [
-            { width: 180, height: 180, crop: 'limit', quality: 'auto' },
-          ],
-          eager_async: false, // Generate synchronously for immediate availability
-        },
+        uploadConfig,
         (error, result) => {
           if (error) {
             reject(error);
