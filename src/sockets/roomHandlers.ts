@@ -36,6 +36,7 @@ interface ElementCreateData {
   rotation?: number;
   scaleX?: number;
   scaleY?: number;
+  stickerText?: string;
 }
 
 interface ElementUpdateData {
@@ -47,6 +48,7 @@ interface ElementUpdateData {
   rotation?: number;
   scaleX?: number;
   scaleY?: number;
+  stickerText?: string;
 }
 
 interface ElementDeleteData {
@@ -161,6 +163,7 @@ export const setupRoomHandlers = (io: Server, socket: SocketWithUser) => {
             rotation: element.rotation,
             scaleX: element.scaleX,
             scaleY: element.scaleY,
+            stickerText: element.stickerText,
             reactions: element.reactions,
             stats: {
               totalComments: element.comments?.count || 0,
@@ -194,6 +197,7 @@ export const setupRoomHandlers = (io: Server, socket: SocketWithUser) => {
               rotation: element.rotation,
               scaleX: element.scaleX,
               scaleY: element.scaleY,
+              stickerText: element.stickerText,
               reactions: element.reactions,
               stats: {
                 totalComments: element.comments?.count || 0,
@@ -307,7 +311,7 @@ export const setupRoomHandlers = (io: Server, socket: SocketWithUser) => {
   // Element management
   socket.on('element:create', async (data: ElementCreateData, callback?: Function) => {
     try {
-      const { roomId, type, positionX, positionY, width, height, content, imageUrl, audioUrl, videoUrl, thumbnailUrl, duration, rotation, scaleX, scaleY } = data;
+      const { roomId, type, positionX, positionY, width, height, content, imageUrl, audioUrl, videoUrl, thumbnailUrl, duration, rotation, scaleX, scaleY, stickerText } = data;
       console.log(`📦 [Room ${roomId}] User ${socket.userId} creating ${type.toUpperCase()} element at (${positionX}, ${positionY})`);
 
       // Verify user is in room and room is not locked
@@ -347,6 +351,7 @@ export const setupRoomHandlers = (io: Server, socket: SocketWithUser) => {
           rotation: rotation || 0,
           scaleX: scaleX || 1,
           scaleY: scaleY || 1,
+          stickerText: stickerText || null,
         },
         include: {
           creator: {
@@ -391,6 +396,7 @@ export const setupRoomHandlers = (io: Server, socket: SocketWithUser) => {
           rotation: element.rotation,
           scaleX: element.scaleX,
           scaleY: element.scaleY,
+          stickerText: element.stickerText,
           reactions: {
             count: 0,
             hasReacted: false,
@@ -477,7 +483,7 @@ export const setupRoomHandlers = (io: Server, socket: SocketWithUser) => {
 
   socket.on('element:update', async (data: ElementUpdateData) => {
     try {
-      const { roomId, elementId, positionX, positionY, content, rotation, scaleX, scaleY } = data;
+      const { roomId, elementId, positionX, positionY, content, rotation, scaleX, scaleY, stickerText } = data;
       console.log(`🔄 [Room ${roomId}] User ${socket.userId} updating element ${elementId}`);
       
       // Check if socket is in room
@@ -528,6 +534,7 @@ export const setupRoomHandlers = (io: Server, socket: SocketWithUser) => {
           ...(rotation !== undefined && { rotation }),
           ...(scaleX !== undefined && { scaleX }),
           ...(scaleY !== undefined && { scaleY }),
+          ...(stickerText !== undefined && { stickerText }),
         },
       });
 
@@ -543,6 +550,7 @@ export const setupRoomHandlers = (io: Server, socket: SocketWithUser) => {
           ...(rotation !== undefined && { rotation }),
           ...(scaleX !== undefined && { scaleX }),
           ...(scaleY !== undefined && { scaleY }),
+          ...(stickerText !== undefined && { stickerText }),
         },
       });
 
@@ -606,12 +614,24 @@ export const setupRoomHandlers = (io: Server, socket: SocketWithUser) => {
     try {
       const { roomId, elementId, transform } = data;
       
+      console.log(`🔄 [Room ${roomId}] User ${socket.userId} live transforming element ${elementId}:`, {
+        rotation: transform.rotation,
+        scaleX: transform.scaleX,
+        scaleY: transform.scaleY
+      });
+      
       // Quick verification user is in room
       const rooms = Array.from(socket.rooms);
       if (!rooms.includes(roomId)) {
+        console.log(`❌ [Room ${roomId}] User ${socket.userId} not in room for transform`);
         socket.emit('error', { message: 'Not in room' });
         return;
       }
+      
+      // Get other users in room for logging
+      const roomSockets = await io.in(roomId).fetchSockets();
+      const otherUsers = roomSockets.filter(s => s.id !== socket.id).length;
+      console.log(`📤 [Room ${roomId}] Broadcasting element:transforming to ${otherUsers} other users`);
       
       // Broadcast preview to others (no DB write)
       socket.to(roomId).emit('element:transforming', {

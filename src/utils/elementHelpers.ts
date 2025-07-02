@@ -57,6 +57,7 @@ export async function getElementsWithReactions(roomId: string, userId: string) {
       e.rotation,
       e.scale_x,
       e.scale_y,
+      e.sticker_text,
       e.created_at,
       e.updated_at,
       json_build_object(
@@ -97,6 +98,7 @@ export async function getElementsWithReactions(roomId: string, userId: string) {
     rotation: element.rotation,
     scaleX: element.scale_x,
     scaleY: element.scale_y,
+    stickerText: element.sticker_text,
     createdAt: element.created_at,
     updatedAt: element.updated_at,
     creator: element.creator,

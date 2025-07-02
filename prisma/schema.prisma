@@ -98,6 +98,7 @@ model Element {
   thumbnailUrl String? @map("thumbnail_url") // For video thumbnails (large)
   smallThumbnailUrl String? @map("small_thumbnail_url") // 180px thumbnail for feed previews
   duration   Float?    // Audio/video duration in seconds
+  stickerText String?  @map("sticker_text") // Optional custom text for LINK elements
   width      Float
   height     Float
   rotation   Float     @default(0) @map("rotation") // Rotation in degrees (0-360)
