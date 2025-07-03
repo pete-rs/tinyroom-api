@@ -52,6 +52,7 @@ model Room {
   objectAddedAt DateTime @default(now()) @map("object_added_at") // Track when elements were last added
   reactionCount Int      @default(0) @map("reaction_count")
   lastReactionAt DateTime? @map("last_reaction_at")
+  commentCount  Int      @default(0) @map("comment_count") // Track total number of comments
   isActive     Boolean  @default(true) @map("is_active")
   isPublic     Boolean  @default(false) @map("is_public") // Room visibility: false = private (default), true = public
   
@@ -127,6 +128,12 @@ model Comment {
   userId                String       @map("user_id")
   user                  User         @relation(fields: [userId], references: [id])
   text                  String       @db.Text
+  
+  // Parent comment for replies
+  parentId              String?      @map("parent_id")
+  parent                Comment?     @relation("CommentReplies", fields: [parentId], references: [id], onDelete: Cascade)
+  replies               Comment[]    @relation("CommentReplies")
+  
   referencedElementId   String?      @map("referenced_element_id")
   referencedElement     Element?     @relation(fields: [referencedElementId], references: [id], onDelete: Cascade)
   referencedElementType ElementType? @map("referenced_element_type")
@@ -136,6 +143,7 @@ model Comment {
   
   @@index([roomId, createdAt(sort: Desc)])
   @@index([referencedElementId])
+  @@index([parentId])
   @@map("comments")
 }
 

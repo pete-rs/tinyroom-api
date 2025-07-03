@@ -427,12 +427,13 @@ export const getRoom = async (req: AuthRequest, res: Response) => {
 
     // Fetch room reaction data
     const [reactionData, userReaction] = await Promise.all([
-      // Get room reaction count
+      // Get room reaction and comment count
       prisma.room.findUnique({
         where: { id: room.id },
         select: {
           reactionCount: true,
           lastReactionAt: true,
+          commentCount: true,
           commentsUpdatedAt: true,
         },
       }),
@@ -447,12 +448,14 @@ export const getRoom = async (req: AuthRequest, res: Response) => {
       }),
     ]);
 
-    // Debug logging for reaction data
-    console.log(`\n❤️  [GET ROOM ${id}] Reaction data:`, {
+    // Debug logging for reaction and comment data
+    console.log(`\n❤️  [GET ROOM ${id}] Reaction & Comment data:`, {
       roomId: room.id,
       roomName: room.name,
       reactionCount: reactionData?.reactionCount || 0,
       lastReactionAt: reactionData?.lastReactionAt,
+      commentCount: reactionData?.commentCount || 0,
+      commentsUpdatedAt: reactionData?.commentsUpdatedAt,
       currentUserHasReacted: !!userReaction,
       currentUserReactionEmoji: userReaction?.emoji || null,
       currentUserId: req.user.id,
@@ -462,20 +465,30 @@ export const getRoom = async (req: AuthRequest, res: Response) => {
     // Fetch elements with reactions
     const elements = await getElementsWithReactions(room.id, req.user.id);
 
-    res.json({
+    const response = {
       data: {
         ...room,
         elements,
         // Add reaction data to response
         reactionCount: reactionData?.reactionCount || 0,
         lastReactionAt: reactionData?.lastReactionAt,
+        commentCount: reactionData?.commentCount || 0,
         commentsUpdatedAt: reactionData?.commentsUpdatedAt,
         userReaction: userReaction ? {
           hasReacted: true,
           emoji: userReaction.emoji,
         } : null,
       },
-    });
+    };
+
+    // Debug log the full response
+    console.log(`\n📤 [GET ROOM ${id}] Full response:`, JSON.stringify({
+      ...response.data,
+      elements: `[${response.data.elements.length} elements]`, // Summarize elements to avoid clutter
+      participants: `[${response.data.participants.length} participants]`, // Summarize participants
+    }, null, 2));
+
+    res.json(response);
   } catch (error) {
     throw error;
   }
@@ -1126,6 +1139,7 @@ export const getMyRooms = async (req: AuthRequest, res: Response) => {
       reaction_count: number;
       last_reaction_at: Date | null;
       comments_updated_at: Date | null;
+      comment_count: number;
       has_user_reacted: boolean;
       user_reaction_emoji: string | null;
       participant_data: any; // JSON array of participants
@@ -1144,6 +1158,7 @@ export const getMyRooms = async (req: AuthRequest, res: Response) => {
         r.is_public,
         r.reaction_count,
         r.last_reaction_at,
+        r.comment_count,
         r.comments_updated_at,
         (r.created_by = ${req.user.id}) as is_creator,
         COUNT(DISTINCT e.id) FILTER (WHERE e.deleted_at IS NULL) as element_count,
@@ -1217,21 +1232,21 @@ export const getMyRooms = async (req: AuthRequest, res: Response) => {
       FROM rooms r
       JOIN room_participants rp ON rp.room_id = r.id AND rp.user_id = ${req.user.id}
       LEFT JOIN elements e ON e.room_id = r.id
-      GROUP BY r.id, r.name, r.created_at, r.updated_at, r.object_added_at, r.created_by, r.name_set_by, r.is_public, r.reaction_count, r.last_reaction_at, r.comments_updated_at, rp.last_visited_at
+      GROUP BY r.id, r.name, r.created_at, r.updated_at, r.object_added_at, r.created_by, r.name_set_by, r.is_public, r.reaction_count, r.last_reaction_at, r.comments_updated_at, r.comment_count, rp.last_visited_at
       ORDER BY GREATEST(r.object_added_at, COALESCE(r.comments_updated_at, r.object_added_at)) DESC
     `;
 
     console.log('🏠 [GET MY ROOMS] Query executed, rooms found:', roomsData.length);
     
-    // Debug: Log reaction data for each room
+    // Debug: Log reaction and comment data for each room
     roomsData.forEach((room, index) => {
-      if (room.has_user_reacted || room.reaction_count > 0) {
-        console.log(`  Room ${index + 1}: ${room.name}`, {
-          reactionCount: room.reaction_count,
-          hasUserReacted: room.has_user_reacted,
-          userEmoji: room.user_reaction_emoji,
-        });
-      }
+      console.log(`  Room ${index + 1}: ${room.name}`, {
+        reactionCount: room.reaction_count,
+        hasUserReacted: room.has_user_reacted,
+        userEmoji: room.user_reaction_emoji,
+        commentCount: room.comment_count,
+        commentsUpdatedAt: room.comments_updated_at,
+      });
     });
 
     // Debug logging for first room
@@ -1258,7 +1273,7 @@ export const getMyRooms = async (req: AuthRequest, res: Response) => {
     }
 
     // Transform the raw data into the expected format
-    const roomsWithUnreadCount = roomsData.map(room => {
+    const roomsWithUnreadCount = roomsData.map((room, index) => {
       const unreadCount = Number(room.unread_elements) + Number(room.unread_messages);
       
       // Process recent elements to ensure thumbnails
@@ -1275,7 +1290,7 @@ export const getMyRooms = async (req: AuthRequest, res: Response) => {
         return elem;
       });
       
-      return {
+      const roomData = {
         id: room.id,
         name: room.name,
         createdAt: room.created_at,
@@ -1301,12 +1316,24 @@ export const getMyRooms = async (req: AuthRequest, res: Response) => {
         // Room-level interaction data
         reactionCount: room.reaction_count,
         lastReactionAt: room.last_reaction_at,
+        commentCount: room.comment_count,
         commentsUpdatedAt: room.comments_updated_at,
         userReaction: room.has_user_reacted ? {
           hasReacted: true,
           emoji: room.user_reaction_emoji || '❤️',
         } : null,
       };
+      
+      // Debug log for comment data
+      if (index === 0) {
+        console.log(`💬 [GET MY ROOMS] First room comment data:`, {
+          raw_comment_count: room.comment_count,
+          transformed_commentCount: roomData.commentCount,
+          roomName: room.name,
+        });
+      }
+      
+      return roomData;
     });
 
     const response = {

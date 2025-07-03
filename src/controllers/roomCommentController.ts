@@ -33,12 +33,13 @@ export const getRoomComments = async (req: AuthRequest, res: Response) => {
       throw new AppError(403, 'FORBIDDEN', 'You are not a participant in this room');
     }
 
-    // Get comments with referenced elements
+    // Get top-level comments with referenced elements and first 3 replies
     const [comments, totalCount] = await Promise.all([
       prisma.comment.findMany({
         where: {
           roomId,
           deletedAt: null,
+          parentId: null, // Only get top-level comments
         },
         include: {
           user: {
@@ -61,6 +62,32 @@ export const getRoomComments = async (req: AuthRequest, res: Response) => {
               createdBy: true,
             },
           },
+          replies: {
+            where: {
+              deletedAt: null,
+            },
+            include: {
+              user: {
+                select: {
+                  id: true,
+                  username: true,
+                  firstName: true,
+                  avatarUrl: true,
+                },
+              },
+            },
+            orderBy: { createdAt: 'asc' },
+            take: 3, // Only include first 3 replies
+          },
+          _count: {
+            select: {
+              replies: {
+                where: {
+                  deletedAt: null,
+                },
+              },
+            },
+          },
         },
         orderBy: { createdAt: 'desc' },
         skip,
@@ -70,6 +97,7 @@ export const getRoomComments = async (req: AuthRequest, res: Response) => {
         where: {
           roomId,
           deletedAt: null,
+          parentId: null, // Only count top-level comments
         },
       }),
     ]);
@@ -77,10 +105,20 @@ export const getRoomComments = async (req: AuthRequest, res: Response) => {
     const meta = getPaginationMeta(totalCount, page, limit);
 
     console.log(`💬 [GET ROOM COMMENTS] Found ${comments.length} comments out of ${totalCount} total`);
-    console.log(`💬 [GET ROOM COMMENTS] Comments:`, JSON.stringify(comments, null, 2));
+
+    // Transform comments to include reply count and hasMoreReplies flag
+    const transformedComments = comments.map(comment => ({
+      ...comment,
+      parentId: comment.parentId,
+      replyCount: comment._count.replies,
+      hasMoreReplies: comment._count.replies > 3,
+      replies: comment.replies || [],
+    }));
+
+    console.log(`💬 [GET ROOM COMMENTS] Comments:`, JSON.stringify(transformedComments, null, 2));
 
     const response = {
-      data: comments,
+      data: transformedComments,
       meta,
     };
     
@@ -95,7 +133,7 @@ export const getRoomComments = async (req: AuthRequest, res: Response) => {
 export const createComment = async (req: AuthRequest, res: Response) => {
   try {
     const { roomId } = req.params;
-    const { text, referencedElementId } = req.body;
+    const { text, referencedElementId, parentId } = req.body;
 
     if (!req.user) {
       throw new AppError(401, 'UNAUTHORIZED', 'User not authenticated');
@@ -142,6 +180,21 @@ export const createComment = async (req: AuthRequest, res: Response) => {
       throw new AppError(403, 'FORBIDDEN', 'You are not a participant in this room');
     }
 
+    // If replying to a comment, verify it exists and belongs to the room
+    if (parentId) {
+      const parentComment = await prisma.comment.findFirst({
+        where: {
+          id: parentId,
+          roomId,
+          deletedAt: null,
+        },
+      });
+
+      if (!parentComment) {
+        throw new AppError(404, 'NOT_FOUND', 'Parent comment not found');
+      }
+    }
+
     // If referencing an element, verify it exists and belongs to the room
     let referencedElementType = null;
     if (referencedElementId) {
@@ -161,7 +214,7 @@ export const createComment = async (req: AuthRequest, res: Response) => {
     }
 
     console.log(`\n💬 [CREATE COMMENT] Creating comment in room ${roomId} by user ${req.user.id}`);
-    console.log(`💬 [CREATE COMMENT] Text: "${text.trim()}", Referenced element: ${referencedElementId || 'none'}`);
+    console.log(`💬 [CREATE COMMENT] Text: "${text.trim()}", Parent: ${parentId || 'none'}, Referenced element: ${referencedElementId || 'none'}`);
 
     // Create comment
     const comment = await prisma.comment.create({
@@ -169,6 +222,7 @@ export const createComment = async (req: AuthRequest, res: Response) => {
         roomId,
         userId: req.user.id,
         text: text.trim(),
+        parentId,
         referencedElementId,
         referencedElementType,
       },
@@ -198,17 +252,30 @@ export const createComment = async (req: AuthRequest, res: Response) => {
 
     console.log(`💬 [CREATE COMMENT] Created comment:`, JSON.stringify(comment, null, 2));
 
-    // Update room's comments updated timestamp
+    // Update room's comments updated timestamp and increment comment count
     await prisma.room.update({
       where: { id: roomId },
-      data: { commentsUpdatedAt: new Date() },
+      data: { 
+        commentsUpdatedAt: new Date(),
+        commentCount: {
+          increment: 1
+        }
+      },
     });
 
     // Emit socket event to all users in room
-    socketService.getIO()?.to(roomId).emit('comment:new', {
-      comment,
-      roomId,
-    });
+    if (parentId) {
+      socketService.getIO()?.to(roomId).emit('comment:reply:new', {
+        roomId,
+        parentCommentId: parentId,
+        reply: comment,
+      });
+    } else {
+      socketService.getIO()?.to(roomId).emit('comment:new', {
+        comment,
+        roomId,
+      });
+    }
 
     // Send push notifications to other participants
     const notificationPromises = room.participants
@@ -271,10 +338,15 @@ export const deleteComment = async (req: AuthRequest, res: Response) => {
       data: { deletedAt: new Date() },
     });
 
-    // Update room's comments updated timestamp
+    // Update room's comments updated timestamp and decrement comment count
     await prisma.room.update({
       where: { id: comment.roomId },
-      data: { commentsUpdatedAt: new Date() },
+      data: { 
+        commentsUpdatedAt: new Date(),
+        commentCount: {
+          decrement: 1
+        }
+      },
     });
 
     // Emit socket event
@@ -287,6 +359,85 @@ export const deleteComment = async (req: AuthRequest, res: Response) => {
       data: {
         message: 'Comment deleted successfully',
       },
+    });
+  } catch (error) {
+    throw error;
+  }
+};
+
+export const getCommentReplies = async (req: AuthRequest, res: Response) => {
+  try {
+    const { commentId } = req.params;
+    const page = parseInt(req.query.page as string) || 1;
+    const limit = parseInt(req.query.limit as string) || 20;
+    const { skip, take } = getPagination({ page, limit });
+
+    if (!req.user) {
+      throw new AppError(401, 'UNAUTHORIZED', 'User not authenticated');
+    }
+
+    // Verify comment exists and get room ID
+    const parentComment = await prisma.comment.findUnique({
+      where: { id: commentId },
+      select: { roomId: true },
+    });
+
+    if (!parentComment) {
+      throw new AppError(404, 'NOT_FOUND', 'Comment not found');
+    }
+
+    // Verify user has access to the room
+    const participant = await prisma.roomParticipant.findUnique({
+      where: {
+        roomId_userId: {
+          roomId: parentComment.roomId,
+          userId: req.user.id,
+        },
+      },
+    });
+
+    if (!participant) {
+      throw new AppError(403, 'FORBIDDEN', 'You are not a participant in this room');
+    }
+
+    // Get all replies for the comment
+    const [replies, totalCount] = await Promise.all([
+      prisma.comment.findMany({
+        where: {
+          parentId: commentId,
+          deletedAt: null,
+        },
+        include: {
+          user: {
+            select: {
+              id: true,
+              username: true,
+              firstName: true,
+              avatarUrl: true,
+            },
+          },
+        },
+        orderBy: { createdAt: 'asc' },
+        skip,
+        take,
+      }),
+      prisma.comment.count({
+        where: {
+          parentId: commentId,
+          deletedAt: null,
+        },
+      }),
+    ]);
+
+    const meta = getPaginationMeta(totalCount, page, limit);
+
+    res.json({
+      data: replies.map(reply => ({
+        ...reply,
+        parentId: reply.parentId,
+        replyCount: 0, // Replies don't have nested replies
+      })),
+      meta,
     });
   } catch (error) {
     throw error;

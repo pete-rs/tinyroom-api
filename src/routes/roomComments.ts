@@ -5,6 +5,7 @@ import {
   getRoomComments,
   createComment,
   deleteComment,
+  getCommentReplies,
 } from '../controllers/roomCommentController';
 
 const router = Router();
@@ -16,5 +17,8 @@ router.use(authMiddleware as any);
 router.get('/rooms/:roomId/comments', asyncHandler(getRoomComments));
 router.post('/rooms/:roomId/comments', asyncHandler(createComment));
 router.delete('/comments/:commentId', asyncHandler(deleteComment));
+
+// Comment reply routes
+router.get('/comments/:commentId/replies', asyncHandler(getCommentReplies));
 
 export default router;
