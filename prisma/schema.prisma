@@ -22,12 +22,8 @@ model User {
   roomsNamedBy    Room[] @relation("RoomNameSetBy")
   roomParticipants RoomParticipant[]
   elements           Element[]
-  messages           Message[]
-  messageReactions   MessageReaction[]
-  messageReads       MessageRead[]
-  elementReactions   ElementReaction[]
-  elementComments    ElementComment[]
-  commentLikes       CommentLike[]
+  comments           Comment[]
+  roomReactions      RoomReaction[]
   
   // Following relationships
   followers    Follow[] @relation("UserFollowing") // People who follow me
@@ -52,15 +48,17 @@ model Room {
   creator      User     @relation("RoomCreatedBy", fields: [createdBy], references: [id])
   createdAt    DateTime @default(now()) @map("created_at")
   updatedAt    DateTime @updatedAt @map("updated_at") // Track when room content is updated (elements, name, etc)
-  messagesUpdatedAt DateTime? @map("messages_updated_at") // Track when messages were last sent/deleted
+  commentsUpdatedAt DateTime? @map("comments_updated_at") // Track when comments were last added/deleted
   objectAddedAt DateTime @default(now()) @map("object_added_at") // Track when elements were last added
+  reactionCount Int      @default(0) @map("reaction_count")
+  lastReactionAt DateTime? @map("last_reaction_at")
   isActive     Boolean  @default(true) @map("is_active")
   isPublic     Boolean  @default(false) @map("is_public") // Room visibility: false = private (default), true = public
   
   participants RoomParticipant[]
   elements     Element[]
-  messages     Message[]
-  comments     ElementComment[]
+  comments     Comment[]
+  reactions    RoomReaction[]
   
   @@map("rooms")
 }
@@ -73,7 +71,6 @@ model RoomParticipant {
   joinedAt       DateTime  @default(now()) @map("joined_at")
   leftAt         DateTime? @map("left_at") // Track when user left
   lastVisitedAt  DateTime  @default(now()) @map("last_visited_at") // Track when user last visited room
-  lastReadAt     DateTime  @default(now()) @map("last_read_at") // Track when user last read messages
   color          String    // Hex color for touch circle
   isActive       Boolean   @default(true) @map("is_active")
   
@@ -108,8 +105,7 @@ model Element {
   updatedAt  DateTime  @updatedAt @map("updated_at")
   deletedAt  DateTime? @map("deleted_at")
   
-  reactions  ElementReaction[]
-  comments   ElementComment[]
+  referencedInComments Comment[]
   
   @@index([roomId, createdAt(sort: Desc)]) // For efficient recent elements query
   @@map("elements")
@@ -124,45 +120,39 @@ enum ElementType {
   LINK
 }
 
-model Message {
-  id         String    @id @default(uuid())
-  roomId     String    @map("room_id")
-  room       Room      @relation(fields: [roomId], references: [id])
-  senderId   String    @map("sender_id")
-  sender     User      @relation(fields: [senderId], references: [id])
-  text       String    @db.Text // Allow longer messages
-  createdAt  DateTime  @default(now()) @map("created_at")
-  updatedAt  DateTime  @updatedAt @map("updated_at")
-  deletedAt  DateTime? @map("deleted_at") // Soft delete
+model Comment {
+  id                    String       @id @default(uuid())
+  roomId                String       @map("room_id")
+  room                  Room         @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  userId                String       @map("user_id")
+  user                  User         @relation(fields: [userId], references: [id])
+  text                  String       @db.Text
+  referencedElementId   String?      @map("referenced_element_id")
+  referencedElement     Element?     @relation(fields: [referencedElementId], references: [id], onDelete: Cascade)
+  referencedElementType ElementType? @map("referenced_element_type")
+  createdAt             DateTime     @default(now()) @map("created_at")
+  updatedAt             DateTime     @updatedAt @map("updated_at")
+  deletedAt             DateTime?    @map("deleted_at")
   
-  reactions  MessageReaction[]
-  readBy     MessageRead[]
-  
-  @@index([roomId, createdAt]) // For efficient pagination
-  @@map("messages")
+  @@index([roomId, createdAt(sort: Desc)])
+  @@index([referencedElementId])
+  @@map("comments")
 }
 
-model MessageReaction {
-  messageId  String   @map("message_id")
-  message    Message  @relation(fields: [messageId], references: [id])
-  userId     String   @map("user_id")
-  user       User     @relation(fields: [userId], references: [id])
-  createdAt  DateTime @default(now()) @map("created_at")
+model RoomReaction {
+  id        String   @id @default(uuid())
+  roomId    String   @map("room_id")
+  room      Room     @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  userId    String   @map("user_id")
+  user      User     @relation(fields: [userId], references: [id])
+  emoji     String   @default("❤️") @db.VarChar(10)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
   
-  @@id([messageId, userId]) // One reaction per user per message
-  @@map("message_reactions")
-}
-
-model MessageRead {
-  messageId  String   @map("message_id")
-  message    Message  @relation(fields: [messageId], references: [id])
-  userId     String   @map("user_id")
-  user       User     @relation(fields: [userId], references: [id])
-  readAt     DateTime @default(now()) @map("read_at")
-  
-  @@id([messageId, userId])
-  @@index([messageId]) // For efficient read receipt queries
-  @@map("message_reads")
+  @@unique([roomId, userId])
+  @@index([roomId])
+  @@index([userId])
+  @@map("room_reactions")
 }
 
 model Follow {
@@ -179,51 +169,3 @@ model Follow {
   @@map("follows")
 }
 
-model ElementReaction {
-  id         String       @id @default(uuid())
-  elementId  String       @map("element_id")
-  element    Element      @relation(fields: [elementId], references: [id], onDelete: Cascade)
-  userId     String       @map("user_id")
-  user       User         @relation(fields: [userId], references: [id])
-  emoji      String       @map("emoji") // Any emoji character(s)
-  createdAt  DateTime     @default(now()) @map("created_at")
-  
-  @@unique([elementId, userId]) // One reaction per user per element
-  @@index([elementId, createdAt]) // For efficient top reactors query
-  @@map("element_reactions")
-}
-
-model ElementComment {
-  id         String        @id @default(uuid())
-  roomId     String        @map("room_id")
-  room       Room          @relation(fields: [roomId], references: [id], onDelete: Cascade)
-  elementId  String        @map("element_id")
-  element    Element       @relation(fields: [elementId], references: [id], onDelete: Cascade)
-  userId     String        @map("user_id")
-  user       User          @relation(fields: [userId], references: [id])
-  content    String        @db.VarChar(140) // Max 140 characters
-  createdAt  DateTime      @default(now()) @map("created_at")
-  updatedAt  DateTime      @updatedAt @map("updated_at")
-  deletedAt  DateTime?     @map("deleted_at") // Soft delete
-  
-  likes      CommentLike[] // Likes on this comment
-  
-  @@index([elementId, createdAt(sort: Desc)]) // For paginated queries
-  @@index([roomId])
-  @@index([userId])
-  @@map("element_comments")
-}
-
-model CommentLike {
-  id         String         @id @default(uuid())
-  commentId  String         @map("comment_id")
-  comment    ElementComment @relation(fields: [commentId], references: [id], onDelete: Cascade)
-  userId     String         @map("user_id")
-  user       User           @relation(fields: [userId], references: [id])
-  createdAt  DateTime       @default(now()) @map("created_at")
-  
-  @@unique([commentId, userId]) // One like per user per comment
-  @@index([commentId])
-  @@index([userId])
-  @@map("comment_likes")
-}

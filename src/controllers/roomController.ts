@@ -425,6 +425,40 @@ export const getRoom = async (req: AuthRequest, res: Response) => {
       })),
     });
 
+    // Fetch room reaction data
+    const [reactionData, userReaction] = await Promise.all([
+      // Get room reaction count
+      prisma.room.findUnique({
+        where: { id: room.id },
+        select: {
+          reactionCount: true,
+          lastReactionAt: true,
+          commentsUpdatedAt: true,
+        },
+      }),
+      // Check if current user has reacted
+      prisma.roomReaction.findUnique({
+        where: {
+          roomId_userId: {
+            roomId: room.id,
+            userId: req.user.id,
+          },
+        },
+      }),
+    ]);
+
+    // Debug logging for reaction data
+    console.log(`\n❤️  [GET ROOM ${id}] Reaction data:`, {
+      roomId: room.id,
+      roomName: room.name,
+      reactionCount: reactionData?.reactionCount || 0,
+      lastReactionAt: reactionData?.lastReactionAt,
+      currentUserHasReacted: !!userReaction,
+      currentUserReactionEmoji: userReaction?.emoji || null,
+      currentUserId: req.user.id,
+      currentUsername: req.user.username,
+    });
+
     // Fetch elements with reactions
     const elements = await getElementsWithReactions(room.id, req.user.id);
 
@@ -432,6 +466,14 @@ export const getRoom = async (req: AuthRequest, res: Response) => {
       data: {
         ...room,
         elements,
+        // Add reaction data to response
+        reactionCount: reactionData?.reactionCount || 0,
+        lastReactionAt: reactionData?.lastReactionAt,
+        commentsUpdatedAt: reactionData?.commentsUpdatedAt,
+        userReaction: userReaction ? {
+          hasReacted: true,
+          emoji: userReaction.emoji,
+        } : null,
       },
     });
   } catch (error) {
@@ -1058,6 +1100,13 @@ export const getMyRooms = async (req: AuthRequest, res: Response) => {
     }
 
     console.log('🏠 [GET MY ROOMS] Starting query for user:', req.user.id);
+    
+    // Debug: Check if user has any reactions
+    const userReactions = await prisma.roomReaction.findMany({
+      where: { userId: req.user.id },
+      take: 5,
+    });
+    console.log('🏠 [GET MY ROOMS] User reactions found:', userReactions.length, userReactions);
 
     // Get all rooms with basic info in a single query
     const roomsData = await prisma.$queryRaw<Array<{
@@ -1065,7 +1114,6 @@ export const getMyRooms = async (req: AuthRequest, res: Response) => {
       name: string;
       created_at: Date;
       updated_at: Date;
-      messages_updated_at: Date | null;
       object_added_at: Date;
       created_by: string;
       name_set_by: string | null;
@@ -1075,6 +1123,11 @@ export const getMyRooms = async (req: AuthRequest, res: Response) => {
       unread_elements: bigint;
       unread_messages: bigint;
       last_visited_at: Date;
+      reaction_count: number;
+      last_reaction_at: Date | null;
+      comments_updated_at: Date | null;
+      has_user_reacted: boolean;
+      user_reaction_emoji: string | null;
       participant_data: any; // JSON array of participants
       creator_data: any; // JSON object of creator
       name_set_by_user_data: any; // JSON object of name setter
@@ -1085,16 +1138,20 @@ export const getMyRooms = async (req: AuthRequest, res: Response) => {
         r.name,
         r.created_at,
         r.updated_at,
-        r.messages_updated_at,
         r.object_added_at,
         r.created_by,
         r.name_set_by,
         r.is_public,
+        r.reaction_count,
+        r.last_reaction_at,
+        r.comments_updated_at,
         (r.created_by = ${req.user.id}) as is_creator,
         COUNT(DISTINCT e.id) FILTER (WHERE e.deleted_at IS NULL) as element_count,
         COUNT(DISTINCT e.id) FILTER (WHERE e.deleted_at IS NULL AND e.created_at > rp.last_visited_at AND e.created_by != ${req.user.id}) as unread_elements,
-        COUNT(DISTINCT m.id) FILTER (WHERE m.deleted_at IS NULL AND m.created_at > rp.last_read_at AND m.sender_id != ${req.user.id}) as unread_messages,
+        0 as unread_messages,
         rp.last_visited_at,
+        EXISTS(SELECT 1 FROM room_reactions rr WHERE rr.room_id = r.id AND rr.user_id = ${req.user.id}) as has_user_reacted,
+        (SELECT emoji FROM room_reactions rr WHERE rr.room_id = r.id AND rr.user_id = ${req.user.id}) as user_reaction_emoji,
         (
           SELECT json_agg(json_build_object(
             'id', u.id,
@@ -1160,12 +1217,22 @@ export const getMyRooms = async (req: AuthRequest, res: Response) => {
       FROM rooms r
       JOIN room_participants rp ON rp.room_id = r.id AND rp.user_id = ${req.user.id}
       LEFT JOIN elements e ON e.room_id = r.id
-      LEFT JOIN messages m ON m.room_id = r.id
-      GROUP BY r.id, r.name, r.created_at, r.updated_at, r.messages_updated_at, r.object_added_at, r.created_by, r.name_set_by, r.is_public, rp.last_visited_at
-      ORDER BY GREATEST(r.object_added_at, COALESCE(r.messages_updated_at, r.object_added_at)) DESC
+      GROUP BY r.id, r.name, r.created_at, r.updated_at, r.object_added_at, r.created_by, r.name_set_by, r.is_public, r.reaction_count, r.last_reaction_at, r.comments_updated_at, rp.last_visited_at
+      ORDER BY GREATEST(r.object_added_at, COALESCE(r.comments_updated_at, r.object_added_at)) DESC
     `;
 
     console.log('🏠 [GET MY ROOMS] Query executed, rooms found:', roomsData.length);
+    
+    // Debug: Log reaction data for each room
+    roomsData.forEach((room, index) => {
+      if (room.has_user_reacted || room.reaction_count > 0) {
+        console.log(`  Room ${index + 1}: ${room.name}`, {
+          reactionCount: room.reaction_count,
+          hasUserReacted: room.has_user_reacted,
+          userEmoji: room.user_reaction_emoji,
+        });
+      }
+    });
 
     // Debug logging for first room
     if (roomsData.length > 0) {
@@ -1213,7 +1280,7 @@ export const getMyRooms = async (req: AuthRequest, res: Response) => {
         name: room.name,
         createdAt: room.created_at,
         updatedAt: room.updated_at,
-        messagesUpdatedAt: room.messages_updated_at,
+        messagesUpdatedAt: null, // Messages no longer exist
         objectAddedAt: room.object_added_at,
         createdBy: room.created_by,
         nameSetBy: room.name_set_by,
@@ -1231,6 +1298,14 @@ export const getMyRooms = async (req: AuthRequest, res: Response) => {
           elements: Number(room.unread_elements),
         },
         recentElements: processedRecentElements,
+        // Room-level interaction data
+        reactionCount: room.reaction_count,
+        lastReactionAt: room.last_reaction_at,
+        commentsUpdatedAt: room.comments_updated_at,
+        userReaction: room.has_user_reacted ? {
+          hasReacted: true,
+          emoji: room.user_reaction_emoji || '❤️',
+        } : null,
       };
     });
 

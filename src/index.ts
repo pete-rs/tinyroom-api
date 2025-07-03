@@ -6,7 +6,6 @@ import app from './app';
 import { config } from './config';
 import { authenticateSocket } from './sockets/socketAuth';
 import { setupRoomHandlers } from './sockets/roomHandlers';
-import { setupMessageHandlers } from './sockets/messageHandlers';
 import { socketService } from './services/socketService';
 
 // Create HTTP or HTTPS server based on environment config
@@ -47,8 +46,6 @@ io.on('connection', (socket) => {
   
   // Set up room handlers
   setupRoomHandlers(io, socket as any);
-  // Set up message handlers
-  setupMessageHandlers(io, socket as any);
   
   // Handle disconnect
   socket.on('disconnect', async () => {

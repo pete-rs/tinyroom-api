@@ -716,13 +716,48 @@ export const setupRoomHandlers = (io: Server, socket: SocketWithUser) => {
     }
   });
 
-  // DEPRECATED: Direct socket reaction toggle - clients should use REST API
-  socket.on('element:reaction:toggle', async (data: { roomId: string; elementId: string }) => {
-    console.log(`⚠️ [Room ${data.roomId}] Client attempted to use deprecated socket reaction toggle`);
-    socket.emit('error', { 
-      message: 'Please use REST API endpoint POST /api/rooms/:roomId/elements/:elementId/reactions/toggle',
-      code: 'USE_REST_API'
-    });
+  // Room-level reaction handler (for real-time updates after REST API calls)
+  socket.on('room:reaction:toggle', async (data: { roomId: string; emoji?: string }) => {
+    try {
+      console.log(`❤️ [Room ${data.roomId}] Reaction toggle notification from ${socket.userId}`);
+      
+      // This is mainly for clients to notify about reaction changes
+      // The actual toggle happens via REST API
+      // We just broadcast the update to other users
+      
+      const rooms = Array.from(socket.rooms);
+      if (!rooms.includes(data.roomId)) {
+        console.log(`❌ [Room ${data.roomId}] User ${socket.userId} not in room`);
+        return;
+      }
+      
+      // Note: The REST API already handles the broadcast
+      // This handler is kept for potential future use
+    } catch (error) {
+      console.error('Error handling room reaction toggle:', error);
+    }
+  });
+  
+  // Room-level comment handler (for real-time updates after REST API calls)
+  socket.on('room:comment:create', async (data: { roomId: string; text: string; referencedElementId?: string }) => {
+    try {
+      console.log(`💬 [Room ${data.roomId}] Comment creation notification from ${socket.userId}`);
+      
+      // This is mainly for clients to notify about new comments
+      // The actual creation happens via REST API
+      // We just verify the user is in the room
+      
+      const rooms = Array.from(socket.rooms);
+      if (!rooms.includes(data.roomId)) {
+        console.log(`❌ [Room ${data.roomId}] User ${socket.userId} not in room`);
+        return;
+      }
+      
+      // Note: The REST API already handles the broadcast
+      // This handler is kept for potential future use
+    } catch (error) {
+      console.error('Error handling room comment creation:', error);
+    }
   });
 
   socket.on('room:clear', async (data: RoomClearData) => {

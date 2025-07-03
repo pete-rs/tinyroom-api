@@ -375,11 +375,6 @@ export const getFollowingFeed = async (req: AuthRequest, res: Response) => {
                 deletedAt: null,
               },
             },
-            messages: {
-              where: {
-                deletedAt: null,
-              },
-            },
           },
         },
       },
@@ -411,7 +406,7 @@ export const getFollowingFeed = async (req: AuthRequest, res: Response) => {
       isPublic: room.isPublic,
       createdAt: room.createdAt,
       updatedAt: room.updatedAt,
-      messagesUpdatedAt: room.messagesUpdatedAt,
+      messagesUpdatedAt: null, // Messages no longer exist
       createdBy: room.createdBy,
       creator: room.creator,
       nameSetBy: room.nameSetBy,

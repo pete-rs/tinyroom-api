@@ -281,6 +281,31 @@ export class NotificationService {
   }
 
   /**
+   * Send notification when someone adds a comment to a room
+   */
+  static async notifyNewComment(
+    recipientId: string,
+    commenterName: string,
+    roomName: string,
+    commentPreview: string
+  ): Promise<void> {
+    const truncatedComment = commentPreview.length > 50 
+      ? commentPreview.substring(0, 47) + '...' 
+      : commentPreview;
+    
+    await this.sendToUser({
+      userId: recipientId,
+      title: `New comment in ${roomName}`,
+      message: `${commenterName}: ${truncatedComment}`,
+      data: {
+        type: 'room_comment',
+        roomName,
+        commenterName,
+      },
+    });
+  }
+
+  /**
    * Send notification when a new message is sent
    */
   static async notifyNewMessage(

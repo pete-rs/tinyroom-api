@@ -12,10 +12,9 @@ import roomRoutes from './routes/rooms';
 import uploadRoutes from './routes/upload';
 import notificationRoutes from './routes/notifications';
 import horoscopeRoutes from './routes/horoscope';
-import messageRoutes from './routes/messages';
 import followRoutes from './routes/follow';
-import reactionRoutes from './routes/reactions';
-import commentRoutes from './routes/comments';
+import roomReactionRoutes from './routes/roomReactions';
+import roomCommentRoutes from './routes/roomComments';
 
 const app = express();
 
@@ -81,6 +80,31 @@ app.get('/db-stats', asyncHandler(async (req: Request, res: Response) => {
   return getDatabaseStats(req, res);
 }));
 
+// Debug endpoint to check reactions (temporary)
+app.get('/debug/reactions/:roomId', asyncHandler(async (req: Request, res: Response) => {
+  const { prisma } = await import('./config/prisma');
+  const { roomId } = req.params;
+  const reactions = await prisma.roomReaction.findMany({
+    where: { roomId },
+    include: {
+      user: {
+        select: {
+          id: true,
+          username: true,
+        },
+      },
+    },
+  });
+  const room = await prisma.room.findUnique({
+    where: { id: roomId },
+    select: {
+      reactionCount: true,
+      lastReactionAt: true,
+    },
+  });
+  res.json({ room, reactions });
+}));
+
 // Test endpoint for debugging
 app.post('/api/test/token', asyncHandler(async (req: Request, res: Response) => {
   const authHeader = req.headers.authorization;
@@ -133,10 +157,9 @@ app.use('/api/rooms', roomRoutes);
 app.use('/api/upload', uploadRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/horoscope', horoscopeRoutes);
-app.use('/api', messageRoutes);
 app.use('/api', followRoutes);
-app.use('/api', reactionRoutes);
-app.use('/api', commentRoutes);
+app.use('/api', roomReactionRoutes);
+app.use('/api', roomCommentRoutes);
 
 // Error handling
 app.use(errorHandler as any);

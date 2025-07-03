@@ -20,11 +20,12 @@ export const getDatabaseStats = async (req: Request, res: Response) => {
     `;
 
     // Get row counts for main tables
-    const [userCount, roomCount, elementCount, messageCount] = await Promise.all([
+    const [userCount, roomCount, elementCount, commentCount, reactionCount] = await Promise.all([
       prisma.user.count(),
       prisma.room.count(),
       prisma.element.count(),
-      prisma.message.count(),
+      prisma.comment.count(),
+      prisma.roomReaction.count(),
     ]);
 
     res.json({
@@ -37,7 +38,8 @@ export const getDatabaseStats = async (req: Request, res: Response) => {
         users: userCount,
         rooms: roomCount,
         elements: elementCount,
-        messages: messageCount,
+        comments: commentCount,
+        roomReactions: reactionCount,
       }
     });
   } catch (error) {
