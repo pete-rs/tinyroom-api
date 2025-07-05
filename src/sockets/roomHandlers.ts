@@ -1,8 +1,10 @@
 import { Server, Socket } from 'socket.io';
 import { prisma } from '../config/prisma';
-import { ElementType } from '@prisma/client';
+import { ElementType, NotificationType } from '@prisma/client';
 import { NotificationService } from '../services/notificationService';
+import { InAppNotificationService } from '../services/inAppNotificationService';
 import { getElementsWithReactions } from '../utils/elementHelpers';
+import { getSmallThumbnailUrl } from '../utils/thumbnailHelpers';
 
 interface SocketWithUser extends Socket {
   userId: string;
@@ -164,6 +166,7 @@ export const setupRoomHandlers = (io: Server, socket: SocketWithUser) => {
             scaleX: element.scaleX,
             scaleY: element.scaleY,
             stickerText: element.stickerText,
+            zIndex: element.zIndex,
             reactions: element.reactions,
             stats: {
               totalComments: element.comments?.count || 0,
@@ -198,6 +201,7 @@ export const setupRoomHandlers = (io: Server, socket: SocketWithUser) => {
               scaleX: element.scaleX,
               scaleY: element.scaleY,
               stickerText: element.stickerText,
+              zIndex: element.zIndex,
               reactions: element.reactions,
               stats: {
                 totalComments: element.comments?.count || 0,
@@ -332,6 +336,17 @@ export const setupRoomHandlers = (io: Server, socket: SocketWithUser) => {
 
       // User can create elements in the room
 
+      // Get the highest z-index in the room to place new element on top
+      const highestZIndex = await prisma.element.findFirst({
+        where: { 
+          roomId,
+          deletedAt: null 
+        },
+        select: { zIndex: true },
+        orderBy: { zIndex: 'desc' }
+      });
+      const newZIndex = (highestZIndex?.zIndex ?? -1) + 1;
+
       // Create element with server-generated ID
       const element = await prisma.element.create({
         data: {
@@ -352,6 +367,7 @@ export const setupRoomHandlers = (io: Server, socket: SocketWithUser) => {
           scaleX: scaleX || 1,
           scaleY: scaleY || 1,
           stickerText: stickerText || null,
+          zIndex: newZIndex,
         },
         include: {
           creator: {
@@ -397,6 +413,7 @@ export const setupRoomHandlers = (io: Server, socket: SocketWithUser) => {
           scaleX: element.scaleX,
           scaleY: element.scaleY,
           stickerText: element.stickerText,
+          zIndex: element.zIndex,
           reactions: {
             count: 0,
             hasReacted: false,
@@ -454,11 +471,26 @@ export const setupRoomHandlers = (io: Server, socket: SocketWithUser) => {
             },
           });
 
-          // Send notification to other participants (non-blocking)
+          // Send notifications to other participants (non-blocking)
           const creator = socket.user;
           if (creator && updatedRoom && updatedRoom.participants.length > 0) {
+            // Prepare thumbnail URL if available
+            let notificationThumbnailUrl = null;
+            const lowerType = type.toLowerCase();
+            if (lowerType === 'photo' && imageUrl) {
+              notificationThumbnailUrl = getSmallThumbnailUrl(imageUrl);
+              console.log(`📸 [PHOTO THUMBNAIL] Generated thumbnail URL: ${notificationThumbnailUrl}`);
+            } else if (lowerType === 'video' && (thumbnailUrl || videoUrl)) {
+              notificationThumbnailUrl = getSmallThumbnailUrl(thumbnailUrl || videoUrl);
+              console.log(`🎥 [VIDEO THUMBNAIL] Generated thumbnail URL: ${notificationThumbnailUrl}`);
+            }
+            console.log(`🔔 [NOTIFICATION] Creating notification with thumbnail: ${notificationThumbnailUrl}`);
+            console.log(`🔔 [NOTIFICATION] Element type: ${type}, imageUrl: ${imageUrl}, videoUrl: ${videoUrl}`);
+            
+
             await Promise.all(
-              updatedRoom.participants.map(participant =>
+              updatedRoom.participants.map(async participant => {
+                // Push notification
                 NotificationService.notifyElementAdded(
                   creator.firstName || creator.username,
                   participant.userId,
@@ -466,9 +498,22 @@ export const setupRoomHandlers = (io: Server, socket: SocketWithUser) => {
                   updatedRoom.name,
                   type.toLowerCase() as 'note' | 'photo' | 'audio' | 'horoscope' | 'video' | 'link'
                 ).catch(err => {
-                  console.error(`❌ Failed to send notification to ${participant.user.username}:`, err.message);
-                })
-              )
+                  console.error(`❌ Failed to send push notification to ${participant.user.username}:`, err.message);
+                });
+
+                // In-app notification (batched)
+                await InAppNotificationService.createNotification({
+                  userId: participant.userId,
+                  type: NotificationType.ELEMENT_ADDED,
+                  actorId: socket.userId,
+                  roomId,
+                  data: {
+                    elementType: type.toUpperCase(),
+                    roomName: updatedRoom.name,
+                    thumbnailUrl: notificationThumbnailUrl,
+                  },
+                });
+              })
             );
           }
         } catch (error) {
@@ -524,7 +569,21 @@ export const setupRoomHandlers = (io: Server, socket: SocketWithUser) => {
         return;
       }
 
-      // Update element
+      // Get the highest z-index in the room to bring this element to front
+      const highestZIndex = await prisma.element.findFirst({
+        where: { 
+          roomId,
+          deletedAt: null,
+          id: { not: elementId } // Exclude current element
+        },
+        select: { zIndex: true },
+        orderBy: { zIndex: 'desc' }
+      });
+      
+      const newZIndex = Math.max((highestZIndex?.zIndex ?? -1) + 1, existingElement.zIndex);
+      const shouldUpdateZIndex = newZIndex > existingElement.zIndex;
+
+      // Update element (including z-index to bring to front)
       const element = await prisma.element.update({
         where: { id: elementId },
         data: {
@@ -535,6 +594,7 @@ export const setupRoomHandlers = (io: Server, socket: SocketWithUser) => {
           ...(scaleX !== undefined && { scaleX }),
           ...(scaleY !== undefined && { scaleY }),
           ...(stickerText !== undefined && { stickerText }),
+          ...(shouldUpdateZIndex && { zIndex: newZIndex }),
         },
       });
 
@@ -551,8 +611,18 @@ export const setupRoomHandlers = (io: Server, socket: SocketWithUser) => {
           ...(scaleX !== undefined && { scaleX }),
           ...(scaleY !== undefined && { scaleY }),
           ...(stickerText !== undefined && { stickerText }),
+          ...(shouldUpdateZIndex && { zIndex: newZIndex }),
         },
       });
+
+      // If z-index changed, also emit specific z-index change event
+      if (shouldUpdateZIndex) {
+        io.to(roomId).emit('element:z-index-changed', {
+          elementId,
+          zIndex: newZIndex,
+        });
+        console.log(`⬆️ [Room ${roomId}] Element ${elementId} brought to front (z-index: ${newZIndex})`);
+      }
 
       console.log(`📤 [Room ${roomId}] Broadcasted element:updated to all participants`);
     } catch (error) {
@@ -670,7 +740,21 @@ export const setupRoomHandlers = (io: Server, socket: SocketWithUser) => {
         return;
       }
       
-      // Update element with transform
+      // Get the highest z-index in the room to bring this element to front
+      const highestZIndex = await prisma.element.findFirst({
+        where: { 
+          roomId,
+          deletedAt: null,
+          id: { not: elementId } // Exclude current element
+        },
+        select: { zIndex: true },
+        orderBy: { zIndex: 'desc' }
+      });
+      
+      const newZIndex = Math.max((highestZIndex?.zIndex ?? -1) + 1, existingElement.zIndex);
+      const shouldUpdateZIndex = newZIndex > existingElement.zIndex;
+
+      // Update element with transform (and bring to front)
       const element = await prisma.element.update({
         where: { id: elementId },
         data: {
@@ -681,6 +765,7 @@ export const setupRoomHandlers = (io: Server, socket: SocketWithUser) => {
           rotation: transform.rotation ?? existingElement.rotation,
           scaleX: transform.scaleX ?? existingElement.scaleX,
           scaleY: transform.scaleY ?? existingElement.scaleY,
+          ...(shouldUpdateZIndex && { zIndex: newZIndex }),
         },
       });
       
@@ -698,8 +783,18 @@ export const setupRoomHandlers = (io: Server, socket: SocketWithUser) => {
           rotation: element.rotation,
           scaleX: element.scaleX,
           scaleY: element.scaleY,
+          zIndex: element.zIndex,
         }
       });
+
+      // If z-index changed, also emit specific z-index change event
+      if (shouldUpdateZIndex) {
+        io.to(roomId).emit('element:z-index-changed', {
+          elementId,
+          zIndex: newZIndex,
+        });
+        console.log(`⬆️ [Room ${roomId}] Element ${elementId} brought to front during transform (z-index: ${newZIndex})`);
+      }
       
       // Update room timestamp in background
       setImmediate(() => {
@@ -713,6 +808,83 @@ export const setupRoomHandlers = (io: Server, socket: SocketWithUser) => {
     } catch (error) {
       console.error('Error handling element transform:', error);
       socket.emit('error', { message: 'Failed to transform element' });
+    }
+  });
+
+  // Handle bringing element to front (z-index update)
+  socket.on('element:bring-to-front', async (data: { roomId: string; elementId: string }) => {
+    try {
+      console.log('🔍 [BRING TO FRONT] Raw data received:', data);
+      
+      if (!data || typeof data !== 'object') {
+        console.error('❌ [BRING TO FRONT] Invalid data format. Expected object with roomId and elementId');
+        socket.emit('error', { message: 'Invalid data format for bring-to-front' });
+        return;
+      }
+      
+      const { roomId, elementId } = data;
+      
+      if (!roomId || !elementId) {
+        console.error('❌ [BRING TO FRONT] Missing required fields:', { roomId, elementId });
+        socket.emit('error', { message: 'roomId and elementId are required' });
+        return;
+      }
+      
+      console.log(`⬆️ [Room ${roomId}] User ${socket.userId} bringing element ${elementId} to front`);
+      
+      // Verify user is in room
+      const rooms = Array.from(socket.rooms);
+      if (!rooms.includes(roomId)) {
+        socket.emit('error', { message: 'Not in room' });
+        socket.emit('room:rejoin-needed', { roomId });
+        return;
+      }
+      
+      // Check if element exists
+      const existingElement = await prisma.element.findUnique({
+        where: { id: elementId },
+        select: { zIndex: true },
+      });
+      
+      if (!existingElement) {
+        console.log(`❌ [Room ${roomId}] Element ${elementId} not found`);
+        socket.emit('error', { message: `Element ${elementId} not found` });
+        return;
+      }
+      
+      // Get the highest z-index in the room
+      const highestZIndex = await prisma.element.findFirst({
+        where: { 
+          roomId,
+          deletedAt: null 
+        },
+        select: { zIndex: true },
+        orderBy: { zIndex: 'desc' }
+      });
+      
+      const newZIndex = (highestZIndex?.zIndex ?? 0) + 1;
+      
+      // Only update if it's not already on top
+      if (existingElement.zIndex < newZIndex - 1) {
+        // Update element z-index
+        await prisma.element.update({
+          where: { id: elementId },
+          data: { zIndex: newZIndex },
+        });
+        
+        console.log(`✅ [Room ${roomId}] Element ${elementId} moved to z-index ${newZIndex}`);
+        
+        // Broadcast z-index change to all participants
+        io.to(roomId).emit('element:z-index-changed', {
+          elementId,
+          zIndex: newZIndex,
+        });
+      } else {
+        console.log(`ℹ️ [Room ${roomId}] Element ${elementId} already on top (z-index: ${existingElement.zIndex})`);
+      }
+    } catch (error) {
+      console.error('Error bringing element to front:', error);
+      socket.emit('error', { message: 'Failed to bring element to front' });
     }
   });
 

@@ -5,6 +5,8 @@ import { AppError } from '../middleware/errorHandler';
 import { socketService } from '../services/socketService';
 import { getPagination, getPaginationMeta } from '../utils/pagination';
 import { NotificationService } from '../services/notificationService';
+import { InAppNotificationService } from '../services/inAppNotificationService';
+import { NotificationType } from '@prisma/client';
 
 export const getRoomComments = async (req: AuthRequest, res: Response) => {
   try {
@@ -75,6 +77,15 @@ export const getRoomComments = async (req: AuthRequest, res: Response) => {
                   avatarUrl: true,
                 },
               },
+              // Check if current user liked each reply
+              likes: {
+                where: {
+                  userId: req.user.id,
+                },
+                select: {
+                  id: true,
+                },
+              },
             },
             orderBy: { createdAt: 'asc' },
             take: 3, // Only include first 3 replies
@@ -86,6 +97,15 @@ export const getRoomComments = async (req: AuthRequest, res: Response) => {
                   deletedAt: null,
                 },
               },
+            },
+          },
+          // Check if current user liked this comment
+          likes: {
+            where: {
+              userId: req.user.id,
+            },
+            select: {
+              id: true,
             },
           },
         },
@@ -106,13 +126,21 @@ export const getRoomComments = async (req: AuthRequest, res: Response) => {
 
     console.log(`💬 [GET ROOM COMMENTS] Found ${comments.length} comments out of ${totalCount} total`);
 
-    // Transform comments to include reply count and hasMoreReplies flag
+    // Transform comments to include reply count, hasMoreReplies flag, and like data
     const transformedComments = comments.map(comment => ({
       ...comment,
       parentId: comment.parentId,
       replyCount: comment._count.replies,
       hasMoreReplies: comment._count.replies > 3,
-      replies: comment.replies || [],
+      likeCount: comment.likeCount,
+      userHasLiked: comment.likes.length > 0,
+      replies: (comment.replies || []).map(reply => ({
+        ...reply,
+        likeCount: reply.likeCount,
+        userHasLiked: reply.likes.length > 0,
+        likes: undefined, // Remove the likes array from response
+      })),
+      likes: undefined, // Remove the likes array from response
     }));
 
     console.log(`💬 [GET ROOM COMMENTS] Comments:`, JSON.stringify(transformedComments, null, 2));
@@ -128,6 +156,19 @@ export const getRoomComments = async (req: AuthRequest, res: Response) => {
   } catch (error) {
     throw error;
   }
+};
+
+// Helper function to extract @mentions from text
+const extractMentions = (text: string): string[] => {
+  const mentionRegex = /@(\w+)/g;
+  const mentions = [];
+  let match;
+  
+  while ((match = mentionRegex.exec(text)) !== null) {
+    mentions.push(match[1]);
+  }
+  
+  return [...new Set(mentions)]; // Remove duplicates
 };
 
 export const createComment = async (req: AuthRequest, res: Response) => {
@@ -213,8 +254,12 @@ export const createComment = async (req: AuthRequest, res: Response) => {
       referencedElementType = element.type;
     }
 
+    // Extract mentioned usernames
+    const mentionedUsernames = extractMentions(text);
+
     console.log(`\n💬 [CREATE COMMENT] Creating comment in room ${roomId} by user ${req.user.id}`);
     console.log(`💬 [CREATE COMMENT] Text: "${text.trim()}", Parent: ${parentId || 'none'}, Referenced element: ${referencedElementId || 'none'}`);
+    console.log(`💬 [CREATE COMMENT] Mentioned users: ${mentionedUsernames.length > 0 ? mentionedUsernames.join(', ') : 'none'}`);
 
     // Create comment
     const comment = await prisma.comment.create({
@@ -225,6 +270,7 @@ export const createComment = async (req: AuthRequest, res: Response) => {
         parentId,
         referencedElementId,
         referencedElementType,
+        mentionedUsernames: mentionedUsernames.length > 0 ? mentionedUsernames : undefined,
       },
       include: {
         user: {
@@ -265,38 +311,112 @@ export const createComment = async (req: AuthRequest, res: Response) => {
 
     // Emit socket event to all users in room
     if (parentId) {
+      console.log(`💬 [CREATE COMMENT] Emitting comment:reply:new for reply to comment ${parentId}`);
       socketService.getIO()?.to(roomId).emit('comment:reply:new', {
         roomId,
         parentCommentId: parentId,
         reply: comment,
       });
     } else {
+      console.log(`💬 [CREATE COMMENT] Emitting comment:new for top-level comment`);
       socketService.getIO()?.to(roomId).emit('comment:new', {
         comment,
         roomId,
       });
     }
 
-    // Send push notifications to other participants
+    // First, identify mentioned users
+    const mentionedUserIds = new Set<string>();
+    if (mentionedUsernames.length > 0) {
+      // Look up mentioned users by username
+      const mentionedUsers = await prisma.user.findMany({
+        where: {
+          username: {
+            in: mentionedUsernames,
+          },
+        },
+        select: {
+          id: true,
+          username: true,
+          oneSignalPlayerId: true,
+        },
+      });
+
+      console.log(`💬 [CREATE COMMENT] Found ${mentionedUsers.length} mentioned users`);
+      
+      // Track mentioned user IDs
+      mentionedUsers.forEach(u => mentionedUserIds.add(u.id));
+    }
+
+    // Send notifications
     const notificationPromises = room.participants
-      .filter(p => p.user.oneSignalPlayerId)
-      .map(p => 
-        NotificationService.notifyNewComment(
-          p.user.id,
-          req.user!.firstName || req.user!.username,
-          room.name,
-          text.substring(0, 100) // Preview of comment
-        )
-      );
+      .filter(p => p.user.id !== req.user!.id) // Don't notify self
+      .map(p => {
+        const isMentioned = mentionedUserIds.has(p.user.id);
+        
+        if (isMentioned) {
+          // Send MENTION notification (not COMMENT_ADDED)
+          if (p.user.oneSignalPlayerId) {
+            NotificationService.notifyMentioned(
+              p.user.id,
+              req.user!.firstName || req.user!.username,
+              room.name,
+              text.substring(0, 100)
+            ).catch(err => console.error('❌ Failed to send mention push notification:', err));
+          }
+
+          return InAppNotificationService.createNotification({
+            userId: p.user.id,
+            type: NotificationType.MENTION,
+            actorId: req.user!.id,
+            roomId,
+            data: {
+              roomName: room.name,
+              commentPreview: text.substring(0, 100),
+            },
+          });
+        } else {
+          // Send COMMENT_ADDED notification
+          if (p.user.oneSignalPlayerId) {
+            NotificationService.notifyNewComment(
+              p.user.id,
+              req.user!.firstName || req.user!.username,
+              room.name,
+              text.substring(0, 100)
+            ).catch(err => console.error('❌ Failed to send push notification:', err));
+          }
+
+          return InAppNotificationService.createNotification({
+            userId: p.user.id,
+            type: NotificationType.COMMENT_ADDED,
+            actorId: req.user!.id,
+            roomId,
+            data: {
+              roomName: room.name,
+              commentPreview: text.substring(0, 100),
+            },
+          });
+        }
+      });
 
     // Fire and forget notifications
     Promise.all(notificationPromises).catch(error => {
       console.error('Failed to send comment notifications:', error);
     });
 
-    res.status(201).json({
+    const response = {
       data: comment,
+    };
+
+    console.log(`💬 [CREATE COMMENT] Response sent:`, {
+      commentId: comment.id,
+      parentId: comment.parentId,
+      text: comment.text.substring(0, 50) + (comment.text.length > 50 ? '...' : ''),
+      userId: comment.userId,
+      likeCount: comment.likeCount || 0,
     });
+
+    res.status(201).json(response);
   } catch (error) {
     throw error;
   }
@@ -305,6 +425,8 @@ export const createComment = async (req: AuthRequest, res: Response) => {
 export const deleteComment = async (req: AuthRequest, res: Response) => {
   try {
     const { commentId } = req.params;
+
+    console.log(`\n🗑️ [DELETE COMMENT] Request to delete comment ${commentId} by user ${req.user?.id}`);
 
     if (!req.user) {
       throw new AppError(401, 'UNAUTHORIZED', 'User not authenticated');
@@ -355,6 +477,9 @@ export const deleteComment = async (req: AuthRequest, res: Response) => {
       roomId: comment.roomId,
     });
 
+    console.log(`🗑️ [DELETE COMMENT] Successfully deleted comment ${commentId} from room ${comment.roomId}`);
+    console.log(`🗑️ [DELETE COMMENT] Comment had ${comment.parentId ? 'parent ' + comment.parentId : 'no parent (top-level)'}`);
+
     res.json({
       data: {
         message: 'Comment deleted successfully',
@@ -371,6 +496,8 @@ export const getCommentReplies = async (req: AuthRequest, res: Response) => {
     const page = parseInt(req.query.page as string) || 1;
     const limit = parseInt(req.query.limit as string) || 20;
     const { skip, take } = getPagination({ page, limit });
+
+    console.log(`\n💬 [GET COMMENT REPLIES] Request for comment ${commentId}, page ${page}, limit ${limit}, user ${req.user?.id}`);
 
     if (!req.user) {
       throw new AppError(401, 'UNAUTHORIZED', 'User not authenticated');
@@ -416,6 +543,15 @@ export const getCommentReplies = async (req: AuthRequest, res: Response) => {
               avatarUrl: true,
             },
           },
+          // Check if current user liked each reply
+          likes: {
+            where: {
+              userId: req.user.id,
+            },
+            select: {
+              id: true,
+            },
+          },
         },
         orderBy: { createdAt: 'asc' },
         skip,
@@ -431,14 +567,153 @@ export const getCommentReplies = async (req: AuthRequest, res: Response) => {
 
     const meta = getPaginationMeta(totalCount, page, limit);
 
+    console.log(`💬 [GET COMMENT REPLIES] Found ${replies.length} replies out of ${totalCount} total for comment ${commentId}`);
+
+    const transformedReplies = replies.map(reply => ({
+      ...reply,
+      parentId: reply.parentId,
+      replyCount: 0, // Replies don't have nested replies
+      likeCount: reply.likeCount,
+      userHasLiked: reply.likes.length > 0,
+      likes: undefined, // Remove the likes array from response
+    }));
+
+    console.log(`💬 [GET COMMENT REPLIES] Transformed replies:`, JSON.stringify(transformedReplies, null, 2));
+
     res.json({
-      data: replies.map(reply => ({
-        ...reply,
-        parentId: reply.parentId,
-        replyCount: 0, // Replies don't have nested replies
-      })),
+      data: transformedReplies,
       meta,
     });
+  } catch (error) {
+    throw error;
+  }
+};
+
+export const toggleCommentLike = async (req: AuthRequest, res: Response) => {
+  try {
+    const { commentId } = req.params;
+
+    if (!req.user) {
+      throw new AppError(401, 'UNAUTHORIZED', 'User not authenticated');
+    }
+
+    // Verify comment exists and get room ID and current like count
+    const comment = await prisma.comment.findUnique({
+      where: { id: commentId },
+      select: { 
+        id: true,
+        roomId: true,
+        deletedAt: true,
+        likeCount: true,
+        userId: true,
+        text: true,
+        room: {
+          select: {
+            name: true,
+          },
+        },
+      },
+    });
+
+    if (!comment || comment.deletedAt) {
+      throw new AppError(404, 'NOT_FOUND', 'Comment not found');
+    }
+
+    // Verify user has access to the room
+    const participant = await prisma.roomParticipant.findUnique({
+      where: {
+        roomId_userId: {
+          roomId: comment.roomId,
+          userId: req.user.id,
+        },
+      },
+    });
+
+    if (!participant) {
+      throw new AppError(403, 'FORBIDDEN', 'You are not a participant in this room');
+    }
+
+    // Check if user has already liked this comment
+    const existingLike = await prisma.commentLike.findUnique({
+      where: {
+        commentId_userId: {
+          commentId,
+          userId: req.user.id,
+        },
+      },
+    });
+
+    let action: 'liked' | 'unliked';
+    let newLikeCount: number;
+
+    if (existingLike) {
+      // Unlike: Remove the like and decrement count
+      await prisma.$transaction([
+        prisma.commentLike.delete({
+          where: { id: existingLike.id },
+        }),
+        prisma.comment.update({
+          where: { id: commentId },
+          data: { likeCount: { decrement: 1 } },
+        }),
+      ]);
+      action = 'unliked';
+      newLikeCount = Math.max(0, comment.likeCount - 1);
+    } else {
+      // Like: Create like and increment count
+      await prisma.$transaction([
+        prisma.commentLike.create({
+          data: {
+            commentId,
+            userId: req.user.id,
+          },
+        }),
+        prisma.comment.update({
+          where: { id: commentId },
+          data: { likeCount: { increment: 1 } },
+        }),
+      ]);
+      action = 'liked';
+      newLikeCount = comment.likeCount + 1;
+
+      // Send notification to comment author (if not self-like)
+      if (comment.userId !== req.user.id) {
+        // Push notification
+        NotificationService.notifyCommentLike(
+          req.user.firstName || req.user.username,
+          comment.userId,
+          comment.roomId,
+          comment.room.name,
+          comment.text.substring(0, 100)
+        ).catch(err => console.error('❌ Failed to send comment like notification:', err));
+
+        // In-app notification
+        InAppNotificationService.createNotification({
+          userId: comment.userId,
+          type: NotificationType.COMMENT_LIKE,
+          actorId: req.user.id,
+          roomId: comment.roomId,
+          data: {
+            roomName: comment.room.name,
+            commentPreview: comment.text.substring(0, 100),
+            commentId,
+          },
+        }).catch(err => console.error('❌ Failed to create in-app notification:', err));
+      }
+    }
+
+    console.log(`👍 [TOGGLE COMMENT LIKE] User ${req.user.username} ${action} comment ${commentId}, new count: ${newLikeCount}`);
+
+    const response = {
+      data: {
+        action,
+        likeCount: newLikeCount,
+      },
+    };
+
+    console.log(`👍 [TOGGLE COMMENT LIKE] Response:`, JSON.stringify(response, null, 2));
+
+    res.json(response);
   } catch (error) {
     throw error;
   }

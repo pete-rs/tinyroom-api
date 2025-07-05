@@ -180,8 +180,12 @@ Users with incomplete profiles (username starting with `user_`) are blocked from
   - Types: "note", "photo", "audio"
   - Required fields: type, positionX, positionY, width, height
   - Optional fields: content (for notes), imageUrl (for photos), audioUrl & duration (for audio)
+  - Server automatically assigns z-index (new elements on top)
 - `element:update` - Update element position/content (writes to database, use sparingly)
 - `element:delete` - Soft delete element
+- `element:bring-to-front` - Move element to top layer (highest z-index)
+  - Required: roomId, elementId
+  - Updates z-index to be higher than all other elements
 - `room:clear` - Clear all elements (creator only)
 
 ### Server Broadcasts
@@ -189,9 +193,10 @@ Users with incomplete profiles (username starting with `user_`) are blocked from
 - `user:left` - User left room
 - `touch:moved` - Touch position update from other user (includes elementId if dragging)
 - `touch:ended` - Touch ended from other user
-- `element:created` - New element created (includes server-generated ID)
+- `element:created` - New element created (includes server-generated ID and z-index)
 - `element:updated` - Element position/content changed
 - `element:deleted` - Element removed
+- `element:z-index-changed` - Element z-index updated (includes elementId, zIndex)
 - `room:cleared` - All elements cleared
 - `room:rejoin-needed` - Socket needs to rejoin room (includes roomId)
 - `error` - Error message

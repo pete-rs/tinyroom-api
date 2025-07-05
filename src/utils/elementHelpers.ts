@@ -14,7 +14,7 @@ export async function getElementsWithReactions(roomId: string, userId: string) {
       },
     },
     orderBy: {
-      createdAt: 'asc',
+      zIndex: 'asc',
     },
   });
 
@@ -38,6 +38,7 @@ export async function getElementsWithReactions(roomId: string, userId: string) {
     scaleX: element.scaleX,
     scaleY: element.scaleY,
     stickerText: element.stickerText,
+    zIndex: element.zIndex,
     createdAt: element.createdAt,
     updatedAt: element.updatedAt,
     creator: element.creator,

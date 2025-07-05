@@ -23,7 +23,12 @@ model User {
   roomParticipants RoomParticipant[]
   elements           Element[]
   comments           Comment[]
+  commentLikes       CommentLike[]
   roomReactions      RoomReaction[]
+  
+  // Notification relationships
+  notifications        Notification[]  @relation("UserNotifications")
+  notificationActions  Notification[]  @relation("ActorNotifications")
   
   // Following relationships
   followers    Follow[] @relation("UserFollowing") // People who follow me
@@ -60,6 +65,7 @@ model Room {
   elements     Element[]
   comments     Comment[]
   reactions    RoomReaction[]
+  notifications Notification[]
   
   @@map("rooms")
 }
@@ -102,6 +108,7 @@ model Element {
   rotation   Float     @default(0) @map("rotation") // Rotation in degrees (0-360)
   scaleX     Float     @default(1) @map("scale_x") // Horizontal scale factor
   scaleY     Float     @default(1) @map("scale_y") // Vertical scale factor
+  zIndex     Int       @default(0) @map("z_index") // Layer order (higher = on top)
   createdAt  DateTime  @default(now()) @map("created_at")
   updatedAt  DateTime  @updatedAt @map("updated_at")
   deletedAt  DateTime? @map("deleted_at")
@@ -109,6 +116,7 @@ model Element {
   referencedInComments Comment[]
   
   @@index([roomId, createdAt(sort: Desc)]) // For efficient recent elements query
+  @@index([roomId, zIndex]) // For efficient z-order queries
   @@map("elements")
 }
 
@@ -119,6 +127,20 @@ enum ElementType {
   HOROSCOPE
   VIDEO
   LINK
+}
+
+enum NotificationType {
+  ROOM_RENAMED      // "{actor} renamed the room {oldName} to {newName}"
+  ELEMENT_ADDED     // "{actor} added {count} {type}" - batched
+  PARTICIPANT_LEFT  // "{actor} left the room {roomName}"
+  ROOM_DELETED      // "{actor} deleted the room {roomName}"
+  ADDED_TO_ROOM     // "{actor} added you to {roomName}"
+  REMOVED_FROM_ROOM // "{actor} removed you from {roomName}"
+  COMMENT_ADDED     // "{actor} commented in {roomName}"
+  MENTION           // "{actor} mentioned you in {roomName}"
+  USER_FOLLOWED     // "{actor} started following you"
+  COMMENT_LIKE      // "{actor} liked your comment: {commentPreview}"
+  ROOM_LIKE         // "{actor} liked your room: {roomName}"
 }
 
 model Comment {
@@ -133,6 +155,13 @@ model Comment {
   parentId              String?      @map("parent_id")
   parent                Comment?     @relation("CommentReplies", fields: [parentId], references: [id], onDelete: Cascade)
   replies               Comment[]    @relation("CommentReplies")
+  
+  // Like tracking
+  likeCount             Int          @default(0) @map("like_count")
+  likes                 CommentLike[]
+  
+  // Mention tracking (optional - stores mentioned usernames as JSON array)
+  mentionedUsernames    Json?        @map("mentioned_usernames") @db.Json
   
   referencedElementId   String?      @map("referenced_element_id")
   referencedElement     Element?     @relation(fields: [referencedElementId], references: [id], onDelete: Cascade)
@@ -175,5 +204,50 @@ model Follow {
   @@index([followerId]) // Fast lookup of who I follow
   @@index([followingId]) // Fast lookup of my followers
   @@map("follows")
+}
+
+model CommentLike {
+  id        String   @id @default(uuid())
+  commentId String   @map("comment_id")
+  comment   Comment  @relation(fields: [commentId], references: [id], onDelete: Cascade)
+  userId    String   @map("user_id")
+  user      User     @relation(fields: [userId], references: [id])
+  createdAt DateTime @default(now()) @map("created_at")
+  
+  @@unique([commentId, userId]) // User can only like a comment once
+  @@index([commentId])
+  @@index([userId])
+  @@map("comment_likes")
+}
+
+model Notification {
+  id                String           @id @default(uuid())
+  userId            String           @map("user_id")          // Recipient
+  type              NotificationType
+  actorId           String           @map("actor_id")        // Who performed the action
+  roomId            String?          @map("room_id")         // For room-related notifications
+  isRead            Boolean          @default(false)         @map("is_read")
+  createdAt         DateTime         @default(now())         @map("created_at")
+  
+  // Flexible data field for type-specific information
+  data              Json             @db.Json                // Stores oldName/newName, elementCount, thumbnails, etc.
+  
+  // For batching - track the batch window
+  batchKey          String?          @map("batch_key")       // e.g., "element_added:roomId:actorId:date"
+  batchCount        Int              @default(1)             @map("batch_count")
+  batchWindowStart  DateTime?        @map("batch_window_start")
+  batchWindowEnd    DateTime?        @map("batch_window_end")
+  
+  // Relations
+  user              User             @relation("UserNotifications", fields: [userId], references: [id], onDelete: Cascade)
+  actor             User             @relation("ActorNotifications", fields: [actorId], references: [id])
+  room              Room?            @relation(fields: [roomId], references: [id], onDelete: SetNull)
+  
+  @@index([userId, isRead, createdAt(sort: Desc)])         // Main query pattern
+  @@index([userId, type, createdAt(sort: Desc)])           // Filter by type
+  @@index([batchKey, batchWindowEnd])                      // For batch updates
+  @@index([roomId])                                         // Room-based queries
+  
+  @@map("notifications")
 }
 

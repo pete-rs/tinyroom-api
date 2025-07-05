@@ -5,7 +5,9 @@ import { AppError } from '../middleware/errorHandler';
 import { getPagination, getPaginationMeta } from '../utils/pagination';
 import { getAvailableColor } from '../utils/colors';
 import { NotificationService } from '../services/notificationService';
+import { InAppNotificationService } from '../services/inAppNotificationService';
 import { userSelect } from '../utils/prismaSelects';
+import { NotificationType } from '@prisma/client';
 import { socketService } from '../services/socketService';
 import { generateRoomColors } from '../utils/roomColors';
 import { getElementsWithReactions } from '../utils/elementHelpers';
@@ -746,7 +748,7 @@ export const getRoomElements = async (req: AuthRequest, res: Response) => {
         },
       },
       orderBy: {
-        createdAt: 'asc',
+        zIndex: 'asc',
       },
     });
 
@@ -838,21 +840,20 @@ export const updateRoomName = async (req: AuthRequest, res: Response) => {
       name = name.trim();
     }
 
-    // Check if user has access to room
+    // Check if user is the owner of the room
     const room = await prisma.room.findFirst({
       where: {
         id,
-        participants: {
-          some: {
-            userId: req.user.id,
-          },
-        },
+        createdBy: req.user.id,
       },
     });
 
     if (!room) {
-      throw new AppError(404, 'ROOM_NOT_FOUND', 'Room not found or access denied');
+      throw new AppError(403, 'FORBIDDEN', 'Only the room owner can update the room name');
     }
+
+    // Store old name for notification
+    const oldName = room.name;
 
     // Update room name
     const updatedRoom = await prisma.room.update({
@@ -888,18 +889,33 @@ export const updateRoomName = async (req: AuthRequest, res: Response) => {
       data: updatedRoom,
     });
 
-    // Send notification after response (non-blocking)
+    // Send notifications after response (non-blocking)
     if (name && req.user) {
       setImmediate(() => {
         const otherParticipants = updatedRoom.participants.filter(p => p.userId !== req.user!.id);
         otherParticipants.forEach(participant => {
+          // Push notification
           NotificationService.notifyRoomRenamed(
             req.user!.firstName || req.user!.username,
             participant.userId,
             updatedRoom.id,
+            oldName,
             name
           ).catch(err => {
             console.error('❌ Failed to send room rename notification:', err);
+          });
+
+          // In-app notification
+          InAppNotificationService.createNotification({
+            userId: participant.userId,
+            type: NotificationType.ROOM_RENAMED,
+            actorId: req.user!.id,
+            roomId: updatedRoom.id,
+            data: {
+              oldName,
+              newName: name,
+              roomName: name,
+            },
           });
         });
       });
@@ -959,13 +975,25 @@ export const deleteRoom = async (req: AuthRequest, res: Response) => {
     // Send notifications to all other participants
     const creatorName = req.user.firstName || req.user.username;
     await Promise.all(
-      otherParticipants.map(participant =>
+      otherParticipants.map(participant => {
+        // Push notification
         NotificationService.notifyRoomDeleted(
           creatorName,
           participant.userId,
           room.name
-        )
-      )
+        );
+
+        // In-app notification
+        return InAppNotificationService.createNotification({
+          userId: participant.userId,
+          type: NotificationType.ROOM_DELETED,
+          actorId: req.user!.id,
+          roomId: undefined, // Room no longer exists
+          data: {
+            roomName: room.name,
+          },
+        });
+      })
     );
 
     res.json({
@@ -1087,13 +1115,26 @@ export const permanentlyLeaveRoom = async (req: AuthRequest, res: Response) => {
       data: {}, // Empty update will trigger @updatedAt
     });
 
-    // Send notification to room creator
+    // Send notifications to room creator
     const leavingUserName = req.user.firstName || req.user.username;
+    
+    // Push notification
     await NotificationService.notifyParticipantLeft(
       leavingUserName,
       room.createdBy,
       room.name
     );
+
+    // In-app notification
+    await InAppNotificationService.createNotification({
+      userId: room.createdBy,
+      type: NotificationType.PARTICIPANT_LEFT,
+      actorId: req.user.id,
+      roomId: room.id,
+      data: {
+        roomName: room.name,
+      },
+    });
 
     res.json({
       data: { 
@@ -1518,10 +1559,11 @@ export const addParticipants = async (req: AuthRequest, res: Response) => {
       addedParticipants: addedParticipants.map(p => ({ id: p.userId, username: p.user.username })),
     });
     
-    // Send push notifications after response
+    // Send notifications after response
     setImmediate(() => {
       const adderName = req.user!.firstName || req.user!.username;
       addedParticipants.forEach(participant => {
+        // Push notification
         NotificationService.notifyAddedToRoom(
           adderName,
           participant.userId,
@@ -1529,6 +1571,17 @@ export const addParticipants = async (req: AuthRequest, res: Response) => {
           updatedRoom!.name
         ).catch(err => {
           console.error('❌ Failed to send participant added notification:', err);
+        });
+
+        // In-app notification
+        InAppNotificationService.createNotification({
+          userId: participant.userId,
+          type: NotificationType.ADDED_TO_ROOM,
+          actorId: req.user!.id,
+          roomId,
+          data: {
+            roomName: updatedRoom!.name,
+          },
         });
       });
     });
@@ -1688,15 +1741,28 @@ export const removeParticipants = async (req: AuthRequest, res: Response) => {
       },
     });
 
-    // Send notification to removed user
+    // Send notifications to removed user
     setImmediate(() => {
       const removerName = req.user!.firstName || req.user!.username;
+      
+      // Push notification
       NotificationService.notifyRemovedFromRoom(
         removerName,
         userId,
         room.name
       ).catch(err => {
         console.error('❌ Failed to send participant removed notification:', err);
+      });
+
+      // In-app notification
+      InAppNotificationService.createNotification({
+        userId,
+        type: NotificationType.REMOVED_FROM_ROOM,
+        actorId: req.user!.id,
+        roomId,
+        data: {
+          roomName: room.name,
+        },
       });
     });
 

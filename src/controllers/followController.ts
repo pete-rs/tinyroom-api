@@ -3,6 +3,8 @@ import { AuthRequest } from '../types';
 import { prisma } from '../config/prisma';
 import { AppError } from '../middleware/errorHandler';
 import { NotificationService } from '../services/notificationService';
+import { InAppNotificationService } from '../services/inAppNotificationService';
+import { NotificationType } from '@prisma/client';
 import { userSelect } from '../utils/prismaSelects';
 
 /**
@@ -59,13 +61,22 @@ export const followUser = async (req: AuthRequest, res: Response) => {
       select: { followersCount: true },
     });
 
-    // Send notification
+    // Send notifications
     setImmediate(() => {
+      // Push notification
       NotificationService.notifyUserFollowed(
         req.user!.firstName || req.user!.username,
         userId
       ).catch(err => {
         console.error('❌ Failed to send follow notification:', err);
+      });
+
+      // In-app notification
+      InAppNotificationService.createNotification({
+        userId, // recipient
+        type: NotificationType.USER_FOLLOWED,
+        actorId: req.user!.id,
+        data: {},
       });
     });
 

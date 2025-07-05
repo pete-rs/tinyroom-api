@@ -103,6 +103,8 @@ Response:
       "parentId": null,  // null for top-level comments
       "replyCount": 3,   // Number of replies
       "hasMoreReplies": false,  // true if more than 3 replies
+      "likeCount": 5,    // Number of likes on this comment
+      "userHasLiked": true,  // Whether current user liked this comment
       "replies": [       // First 3 replies included
         {
           "id": "reply-id",
@@ -114,6 +116,8 @@ Response:
             "firstName": "User",
             "avatarUrl": "..."
           },
+          "likeCount": 2,
+          "userHasLiked": false,
           "createdAt": "2025-07-03T..."
         }
       ],
@@ -146,6 +150,8 @@ Response:
       "parentId": "comment-id",
       "user": { /* user object */ },
       "replyCount": 0,  // Replies don't have nested replies
+      "likeCount": 3,
+      "userHasLiked": true,
       "createdAt": "2025-07-03T..."
     }
   ],
@@ -204,6 +210,20 @@ Response:
     "parentId": "parent-comment-id",
     "user": { /* user object */ },
     "createdAt": "2025-07-03T..."
+  }
+}
+```
+
+### Toggle Comment Like
+```
+POST /api/comments/:commentId/like
+Authorization: Bearer <token>
+
+Response:
+{
+  "data": {
+    "action": "liked" | "unliked",
+    "likeCount": 6  // New total like count
   }
 }
 ```

@@ -3,6 +3,9 @@ import { AuthRequest } from '../types';
 import { prisma } from '../config/prisma';
 import { AppError } from '../middleware/errorHandler';
 import { socketService } from '../services/socketService';
+import { NotificationService } from '../services/notificationService';
+import { InAppNotificationService } from '../services/inAppNotificationService';
+import { NotificationType } from '@prisma/client';
 
 export const toggleReaction = async (req: AuthRequest, res: Response) => {
   try {
@@ -79,11 +82,38 @@ export const toggleReaction = async (req: AuthRequest, res: Response) => {
           reactionCount: { increment: 1 },
           lastReactionAt: new Date(),
         },
-        select: { reactionCount: true },
+        select: { 
+          reactionCount: true,
+          createdBy: true,
+          name: true,
+        },
       });
       
       action = 'added';
       reactionCount = updatedRoom.reactionCount;
+
+      // Send notification to room owner (if not self-like)
+      if (updatedRoom.createdBy !== req.user.id) {
+        // Push notification
+        NotificationService.notifyRoomLike(
+          req.user.firstName || req.user.username,
+          updatedRoom.createdBy,
+          roomId,
+          updatedRoom.name
+        ).catch(err => console.error('❌ Failed to send room like notification:', err));
+
+        // In-app notification
+        InAppNotificationService.createNotification({
+          userId: updatedRoom.createdBy,
+          type: NotificationType.ROOM_LIKE,
+          actorId: req.user.id,
+          roomId,
+          data: {
+            roomName: updatedRoom.name,
+            emoji,
+          },
+        }).catch(err => console.error('❌ Failed to create in-app notification:', err));
+      }
     }
 
     // Emit socket event to all users in room

@@ -6,6 +6,7 @@ import {
   createComment,
   deleteComment,
   getCommentReplies,
+  toggleCommentLike,
 } from '../controllers/roomCommentController';
 
 const router = Router();
@@ -20,5 +21,8 @@ router.delete('/comments/:commentId', asyncHandler(deleteComment));
 
 // Comment reply routes
 router.get('/comments/:commentId/replies', asyncHandler(getCommentReplies));
+
+// Comment like routes
+router.post('/comments/:commentId/like', asyncHandler(toggleCommentLike));
 
 export default router;

@@ -36,7 +36,13 @@ class SocketService {
     // Emit to all clients in the room
     this.io.to(roomId).emit(event, data);
     
-    console.log(`📤 [Room ${roomId}] Emitted ${event} event`);
+    // Enhanced logging for comment events
+    if (event.includes('comment')) {
+      console.log(`\n💬📤 [SOCKET] Emitting ${event} to room ${roomId}`);
+      console.log(`💬📤 [SOCKET] Event data:`, JSON.stringify(data, null, 2));
+    } else {
+      console.log(`📤 [Room ${roomId}] Emitted ${event} event`);
+    }
   }
 }
 

@@ -1,0 +1,55 @@
+// Notification Types for in-app notifications tab
+enum NotificationType {
+  ROOM_RENAMED      // "{actor} renamed the room {oldName} to {newName}"
+  ELEMENT_ADDED     // "{actor} added {count} {type}" - batched
+  PARTICIPANT_LEFT  // "{actor} left the room {roomName}"
+  USER_FOLLOWED     // "{actor} started following you"
+  COMMENT_ADDED     // "{actor} commented in {roomName}"
+  MENTION           // "{actor} mentioned you in {roomName}"
+}
+
+model Notification {
+  id                String           @id @default(uuid())
+  userId            String           @map("user_id")          // Recipient
+  type              NotificationType
+  actorId           String           @map("actor_id")        // Who performed the action
+  roomId            String?          @map("room_id")         // For room-related notifications
+  isRead            Boolean          @default(false)         @map("is_read")
+  createdAt         DateTime         @default(now())         @map("created_at")
+  
+  // Flexible data field for type-specific information
+  data              Json             @db.Json                // Stores oldName/newName, elementCount, thumbnails, etc.
+  
+  // For batching - track the batch window
+  batchKey          String?          @map("batch_key")       // e.g., "element_added:roomId:actorId:date"
+  batchCount        Int              @default(1)             @map("batch_count")
+  batchWindowStart  DateTime?        @map("batch_window_start")
+  batchWindowEnd    DateTime?        @map("batch_window_end")
+  
+  // Relations
+  user              User             @relation("UserNotifications", fields: [userId], references: [id], onDelete: Cascade)
+  actor             User             @relation("ActorNotifications", fields: [actorId], references: [id])
+  room              Room?            @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  
+  @@index([userId, isRead, createdAt(sort: Desc)])         // Main query pattern
+  @@index([userId, type, createdAt(sort: Desc)])           // Filter by type
+  @@index([batchKey, batchWindowEnd])                      // For batch updates
+  @@index([roomId])                                         // Room-based queries
+  
+  @@map("notifications")
+}
+
+// Update User model
+model User {
+  // ... existing fields ...
+  
+  notifications        Notification[]  @relation("UserNotifications")
+  notificationActions  Notification[]  @relation("ActorNotifications")
+}
+
+// Update Room model  
+model Room {
+  // ... existing fields ...
+  
+  notifications    Notification[]
+}

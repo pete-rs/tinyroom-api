@@ -20,7 +20,10 @@ interface TokenCacheEntry {
 }
 
 const opaqueTokenCache = new Map<string, TokenCacheEntry>();
+const userInfoCache = new Map<string, { userInfo: any; expiresAt: number }>();
 const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
+const RATE_LIMIT_BACKOFF = 30 * 1000; // 30 seconds backoff for rate limits
+let lastRateLimitTime = 0;
 
 function getKey(header: jwt.JwtHeader, callback: jwt.SigningKeyCallback) {
   jwksClient.getSigningKey(header.kid!, (err, key) => {
@@ -194,27 +197,62 @@ export const authMiddleware = async (
       // If email is missing from JWT (common with magic link), fetch from userinfo
       if (!email && decoded.scope?.includes('email')) {
         console.log('Email missing from JWT, fetching from userinfo endpoint...');
-        try {
-          const userInfoResponse = await fetch(
-            `https://${config.auth0.domain}/userinfo`,
-            {
-              headers: {
-                Authorization: `Bearer ${token}`,
-              },
-            }
-          );
-          
-          if (userInfoResponse.ok) {
-            const userInfo = await userInfoResponse.json();
-            console.log('UserInfo response:', JSON.stringify(userInfo, null, 2));
-            email = userInfo.email;
-            req.auth.email = email;
-            req.auth.email_verified = userInfo.email_verified;
+        
+        // Check cache first
+        const cacheKey = `userinfo:${auth0Id}`;
+        const cached = userInfoCache.get(cacheKey);
+        if (cached && cached.expiresAt > Date.now()) {
+          console.log('Using cached userinfo data');
+          email = cached.userInfo.email;
+          req.auth.email = email;
+          req.auth.email_verified = cached.userInfo.email_verified;
+        } else {
+          // Check if we're in rate limit backoff period
+          if (lastRateLimitTime && Date.now() - lastRateLimitTime < RATE_LIMIT_BACKOFF) {
+            console.log('Skipping userinfo fetch due to recent rate limit');
           } else {
-            console.error('Failed to fetch userinfo:', userInfoResponse.status);
+            try {
+              const userInfoResponse = await fetch(
+                `https://${config.auth0.domain}/userinfo`,
+                {
+                  headers: {
+                    Authorization: `Bearer ${token}`,
+                  },
+                }
+              );
+              
+              if (userInfoResponse.ok) {
+                const userInfo = await userInfoResponse.json();
+                console.log('UserInfo response:', JSON.stringify(userInfo, null, 2));
+                email = userInfo.email;
+                req.auth.email = email;
+                req.auth.email_verified = userInfo.email_verified;
+                
+                // Cache the result
+                userInfoCache.set(cacheKey, {
+                  userInfo,
+                  expiresAt: Date.now() + CACHE_DURATION
+                });
+                
+                // Clean up old cache entries if cache is getting large
+                if (userInfoCache.size > 100) {
+                  const now = Date.now();
+                  for (const [key, value] of userInfoCache.entries()) {
+                    if (value.expiresAt < now) {
+                      userInfoCache.delete(key);
+                    }
+                  }
+                }
+              } else {
+                console.error('Failed to fetch userinfo:', userInfoResponse.status);
+                if (userInfoResponse.status === 429) {
+                  lastRateLimitTime = Date.now();
+                }
+              }
+            } catch (error) {
+              console.error('Error fetching userinfo:', error);
+            }
           }
-        } catch (error) {
-          console.error('Error fetching userinfo:', error);
         }
       }
       

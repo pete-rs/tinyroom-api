@@ -78,12 +78,13 @@ export class NotificationService {
     updaterName: string,
     recipientId: string,
     roomId: string,
+    oldName: string,
     newName: string
   ): Promise<void> {
     await this.sendToUser({
       userId: recipientId,
       title: 'Room Renamed',
-      message: `${updaterName} renamed your room to ${newName}`,
+      message: `${updaterName} renamed the room ${oldName} to ${newName}`,
       data: {
         type: 'room_renamed',
         roomId,
@@ -111,7 +112,7 @@ export class NotificationService {
     
     await this.sendToUser({
       userId: recipientId,
-      title: 'New Content',
+      title: 'Object Added',
       message: `${creatorName} added a ${elementDisplay} in ${roomDisplay}`,
       data: {
         type: 'element_added',
@@ -142,6 +143,7 @@ export class NotificationService {
 
   /**
    * Send notification when a participant leaves a room
+   * Note: This notification is only sent to the room owner
    */
   static async notifyParticipantLeft(
     participantName: string,
@@ -151,7 +153,7 @@ export class NotificationService {
     await this.sendToUser({
       userId: creatorId,
       title: 'Participant Left',
-      message: `${participantName} left the room "${roomName}"`,
+      message: `${participantName} left the room ${roomName}`,
       data: {
         type: 'participant_left',
         roomName,
@@ -202,60 +204,6 @@ export class NotificationService {
     });
   }
 
-  /**
-   * Send notification when someone reacts to your element
-   */
-  static async notifyElementReaction(
-    reactorName: string,
-    elementCreatorId: string,
-    roomId: string,
-    roomName: string,
-    elementType: 'note' | 'photo' | 'audio' | 'video' | 'link',
-    reactionCount: number
-  ): Promise<void> {
-    await this.sendToUser({
-      userId: elementCreatorId,
-      title: `New reaction on your ${elementType}`,
-      message: `${reactorName} reacted to your ${elementType} in ${roomName}`,
-      data: {
-        type: 'element_reaction',
-        roomId,
-        roomName,
-        elementType,
-        reactorName,
-        totalReactions: reactionCount,
-      },
-    });
-  }
-
-  /**
-   * Send notification when someone comments on your element
-   */
-  static async notifyElementComment(
-    commenterName: string,
-    elementCreatorId: string,
-    roomId: string,
-    roomName: string,
-    elementType: 'note' | 'photo' | 'audio' | 'video' | 'link',
-    commentText: string
-  ): Promise<void> {
-    const truncatedComment = commentText.length > 50 
-      ? commentText.substring(0, 47) + '...' 
-      : commentText;
-    
-    await this.sendToUser({
-      userId: elementCreatorId,
-      title: `New comment on your ${elementType}`,
-      message: `${commenterName}: ${truncatedComment}`,
-      data: {
-        type: 'element_comment',
-        roomId,
-        roomName,
-        elementType,
-        commenterName,
-      },
-    });
-  }
 
   /**
    * Send notification when someone likes your comment
@@ -270,7 +218,7 @@ export class NotificationService {
     await this.sendToUser({
       userId: commentAuthorId,
       title: 'Your comment was liked',
-      message: `${likerName} liked your comment "${commentText}"`,
+      message: `${likerName} liked your comment: ${commentText}`,
       data: {
         type: 'comment_like',
         roomId,
@@ -305,28 +253,6 @@ export class NotificationService {
     });
   }
 
-  /**
-   * Send notification when a new message is sent
-   */
-  static async notifyNewMessage(
-    senderName: string,
-    recipientId: string,
-    roomId: string,
-    roomName: string,
-    messagePreview: string
-  ): Promise<void> {
-    await this.sendToUser({
-      userId: recipientId,
-      title: roomName,
-      message: `${senderName}: ${messagePreview}`,
-      data: {
-        type: 'new_message',
-        roomId,
-        roomName,
-        senderName,
-      },
-    });
-  }
 
   /**
    * Send notification when someone follows you
@@ -342,6 +268,53 @@ export class NotificationService {
       data: {
         type: 'user_followed',
         followerName,
+      },
+    });
+  }
+
+  /**
+   * Send notification when someone likes your room
+   */
+  static async notifyRoomLike(
+    likerName: string,
+    roomOwnerId: string,
+    roomId: string,
+    roomName: string
+  ): Promise<void> {
+    await this.sendToUser({
+      userId: roomOwnerId,
+      title: 'Your room was liked',
+      message: `${likerName} liked your room: ${roomName}`,
+      data: {
+        type: 'room_like',
+        roomId,
+        roomName,
+        likerName,
+      },
+    });
+  }
+
+  /**
+   * Send notification when someone mentions you in a comment
+   */
+  static async notifyMentioned(
+    mentionedUserId: string,
+    mentionerName: string,
+    roomName: string,
+    commentPreview: string
+  ): Promise<void> {
+    const truncatedComment = commentPreview.length > 50 
+      ? commentPreview.substring(0, 47) + '...' 
+      : commentPreview;
+    
+    await this.sendToUser({
+      userId: mentionedUserId,
+      title: `${mentionerName} mentioned you`,
+      message: `In ${roomName}: ${truncatedComment}`,
+      data: {
+        type: 'mention',
+        roomName,
+        mentionerName,
       },
     });
   }

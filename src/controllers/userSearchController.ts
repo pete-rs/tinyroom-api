@@ -2,188 +2,190 @@ import { Response } from 'express';
 import { AuthRequest } from '../types';
 import { prisma } from '../config/prisma';
 import { AppError } from '../middleware/errorHandler';
+import { Prisma } from '@prisma/client';
 
-/**
- * Improved user search with multiple strategies
- */
-export const searchUsersOptimized = async (req: AuthRequest, res: Response) => {
+export const searchUsersForMentions = async (req: AuthRequest, res: Response) => {
   try {
-    const { q } = req.query;
-    const page = parseInt(req.query.page as string) || 1;
-    const limit = parseInt(req.query.limit as string) || 20;
-    const offset = (page - 1) * limit;
+    const { prefix = '', roomId, limit = '10' } = req.query;
+    const limitNum = Math.min(parseInt(limit as string), 20); // Max 20 results
 
-    if (!q || typeof q !== 'string' || q.trim().length === 0) {
-      throw new AppError(400, 'INVALID_QUERY', 'Search query parameter (q) is required');
-    }
+    console.log(`\n🔍 [MENTION SEARCH] User ${req.user?.username} searching for prefix: "${prefix}", room: ${roomId}, limit: ${limitNum}`);
 
     if (!req.user) {
       throw new AppError(401, 'UNAUTHORIZED', 'User not authenticated');
     }
 
-    const searchTerm = q.trim().toLowerCase();
+    // If roomId is provided, check room access and privacy
+    let roomParticipantIds: string[] | undefined;
+    let shouldFilterByRoom = false;
     
-    // Strategy 1: Exact match (highest priority)
-    // Strategy 2: Starts with (high priority)
-    // Strategy 3: Contains (medium priority)
-    // Strategy 4: Fuzzy match (low priority)
+    if (roomId) {
+      const room = await prisma.room.findFirst({
+        where: {
+          id: roomId as string,
+          OR: [
+            // User is a participant
+            {
+              participants: {
+                some: {
+                  userId: req.user.id,
+                },
+              },
+            },
+            // OR room is public
+            {
+              isPublic: true,
+            },
+          ],
+        },
+        select: {
+          isPublic: true,
+          participants: {
+            select: {
+              userId: true,
+            },
+          },
+        },
+      });
+
+      if (!room) {
+        throw new AppError(403, 'FORBIDDEN', 'You do not have access to this room');
+      }
+
+      // For private rooms, only search participants
+      // For public rooms, search all users
+      if (!room.isPublic) {
+        shouldFilterByRoom = true;
+        roomParticipantIds = room.participants.map(p => p.userId);
+        console.log(`🔍 [MENTION SEARCH] Private room - limiting to ${roomParticipantIds.length} participants`);
+      } else {
+        console.log(`🔍 [MENTION SEARCH] Public room - searching all users`);
+      }
+    }
+
+    // Build the query
+    let users;
+    const prefixLower = (prefix as string).toLowerCase();
     
-    const users = await prisma.$queryRaw<Array<{
-      id: string;
-      username: string;
-      first_name: string;
-      email: string;
-      avatar_url: string | null;
-      followers_count: number;
-      following_count: number;
-      following: boolean;
-      follows_me: boolean;
-      match_score: number;
-    }>>`
-      WITH search_results AS (
+    if (!prefix || prefix === '') {
+      // No prefix: return recently active users or popular users
+      // For now, just return some users ordered by creation date
+      users = await prisma.user.findMany({
+        where: {
+          id: shouldFilterByRoom && roomParticipantIds ? { in: roomParticipantIds } : undefined,
+          // Exclude users with incomplete profiles
+          NOT: {
+            username: {
+              startsWith: 'user_',
+            },
+          },
+        },
+        select: {
+          id: true,
+          username: true,
+          firstName: true,
+          avatarUrl: true,
+        },
+        orderBy: {
+          createdAt: 'desc',
+        },
+        take: limitNum,
+      });
+    } else {
+      // With prefix: search for usernames starting with prefix (case-insensitive)
+      users = await prisma.$queryRaw<Array<{
+        id: string;
+        username: string;
+        first_name: string;
+        avatar_url: string | null;
+      }>>`
         SELECT 
-          u.id,
-          u.username,
-          u.first_name,
-          u.email,
-          u.avatar_url,
-          u.followers_count,
-          u.following_count,
-          CASE WHEN f1.id IS NOT NULL THEN true ELSE false END as following,
-          CASE WHEN f2.id IS NOT NULL THEN true ELSE false END as follows_me,
-          -- Calculate match score for better ranking
-          CASE
-            -- Exact matches get highest score
-            WHEN LOWER(u.username) = ${searchTerm} THEN 100
-            WHEN LOWER(u.first_name) = ${searchTerm} THEN 95
-            -- Starts with matches
-            WHEN LOWER(u.username) LIKE ${searchTerm + '%'} THEN 
-              80 - LENGTH(u.username) + LENGTH(${searchTerm})
-            WHEN LOWER(u.first_name) LIKE ${searchTerm + '%'} THEN 
-              75 - LENGTH(u.first_name) + LENGTH(${searchTerm})
-            -- Contains matches
-            WHEN LOWER(u.username) LIKE ${'%' + searchTerm + '%'} THEN 50
-            WHEN LOWER(u.first_name) LIKE ${'%' + searchTerm + '%'} THEN 45
-            -- Fuzzy matches using similarity (if available)
-            ELSE 0
-          END as match_score
-        FROM users u
-        LEFT JOIN follows f1 ON f1.following_id = u.id AND f1.follower_id = ${req.user.id}
-        LEFT JOIN follows f2 ON f2.follower_id = u.id AND f2.following_id = ${req.user.id}
+          id,
+          username,
+          first_name,
+          avatar_url
+        FROM users
         WHERE 
-          u.id != ${req.user.id}
-          AND u.first_name != ''
-          AND NOT u.username LIKE 'user_%'
-          AND (
-            LOWER(u.username) LIKE ${'%' + searchTerm + '%'}
-            OR LOWER(u.first_name) LIKE ${'%' + searchTerm + '%'}
-          )
-      )
-      SELECT * FROM search_results
-      WHERE match_score > 0
-      ORDER BY 
-        match_score DESC,
-        followers_count DESC,
-        username ASC
-      LIMIT ${limit}
-      OFFSET ${offset}
-    `;
+          LOWER(username) LIKE ${prefixLower + '%'}
+          AND username NOT LIKE 'user_%'
+          ${shouldFilterByRoom && roomParticipantIds ? Prisma.sql`AND id IN (${Prisma.join(roomParticipantIds)})` : Prisma.empty}
+        ORDER BY 
+          CASE 
+            WHEN LOWER(username) = ${prefixLower} THEN 0
+            ELSE 1
+          END,
+          username ASC
+        LIMIT ${limitNum}
+      `;
 
-    // Get total count
-    const totalCount = await prisma.$queryRaw<[{ count: bigint }]>`
-      SELECT COUNT(*)::bigint as count
-      FROM users u
-      WHERE 
-        u.id != ${req.user.id}
-        AND u.first_name != ''
-        AND NOT u.username LIKE 'user_%'
-        AND (
-          LOWER(u.username) LIKE ${'%' + searchTerm + '%'}
-          OR LOWER(u.first_name) LIKE ${'%' + searchTerm + '%'}
-        )
-    `;
+      // Transform snake_case to camelCase
+      users = users.map(user => ({
+        id: user.id,
+        username: user.username,
+        firstName: user.first_name,
+        avatarUrl: user.avatar_url,
+      }));
+    }
 
-    const total = Number(totalCount[0].count);
-
-    // Transform to camelCase and remove internal score
-    const transformedUsers = users.map(({ match_score, ...user }) => ({
-      id: user.id,
-      username: user.username,
-      firstName: user.first_name,
-      email: user.email,
-      avatarUrl: user.avatar_url,
-      followersCount: user.followers_count,
-      followingCount: user.following_count,
-      following: user.following,
-      followsMe: user.follows_me,
-    }));
+    console.log(`🔍 [MENTION SEARCH] Found ${users.length} users for prefix "${prefix}"`);
+    
+    if (users.length > 0) {
+      console.log(`🔍 [MENTION SEARCH] First 3 results:`, 
+        users.slice(0, 3).map(u => ({ username: u.username, firstName: u.firstName }))
+      );
+    }
 
     res.json({
-      data: transformedUsers,
-      meta: {
-        total,
-        page,
-        limit,
-        hasMore: total > offset + limit,
-        query: q,
-      },
+      data: users,
     });
   } catch (error) {
+    console.error('❌ [MENTION SEARCH] Error:', error);
     throw error;
   }
 };
 
-/**
- * Get search suggestions (autocomplete)
- */
-export const getSearchSuggestions = async (req: AuthRequest, res: Response) => {
+// Validate mentioned users exist (for comment submission)
+export const validateMentionedUsers = async (req: AuthRequest, res: Response) => {
   try {
-    const { q } = req.query;
-
-    if (!q || typeof q !== 'string' || q.trim().length < 2) {
-      return res.json({ data: [] });
-    }
+    const { usernames } = req.body;
 
     if (!req.user) {
       throw new AppError(401, 'UNAUTHORIZED', 'User not authenticated');
     }
 
-    const searchTerm = q.trim().toLowerCase();
-    
-    // Get top 5 suggestions
-    const suggestions = await prisma.$queryRaw<Array<{
-      username: string;
-      first_name: string;
-    }>>`
-      SELECT DISTINCT username, first_name
-      FROM users
-      WHERE 
-        id != ${req.user.id}
-        AND first_name != ''
-        AND NOT username LIKE 'user_%'
-        AND (
-          LOWER(username) LIKE ${searchTerm + '%'}
-          OR LOWER(first_name) LIKE ${searchTerm + '%'}
-        )
-      ORDER BY 
-        CASE 
-          WHEN LOWER(username) LIKE ${searchTerm + '%'} THEN 0
-          ELSE 1
-        END,
-        username
-      LIMIT 5
-    `;
+    if (!Array.isArray(usernames) || usernames.length === 0) {
+      throw new AppError(400, 'INVALID_INPUT', 'Usernames must be a non-empty array');
+    }
 
-    const transformedSuggestions = suggestions.map(s => ({
-      username: s.username,
-      firstName: s.first_name,
-      displayText: `${s.first_name} (@${s.username})`,
+    // Limit to 20 usernames
+    const limitedUsernames = usernames.slice(0, 20);
+
+    const users = await prisma.user.findMany({
+      where: {
+        username: {
+          in: limitedUsernames,
+        },
+      },
+      select: {
+        id: true,
+        username: true,
+      },
+    });
+
+    const usernameToId = new Map(users.map(u => [u.username, u.id]));
+    const result = limitedUsernames.map(username => ({
+      username,
+      userId: usernameToId.get(username) || null,
+      exists: usernameToId.has(username),
     }));
 
+    console.log(`✅ [VALIDATE MENTIONS] Validated ${limitedUsernames.length} usernames, ${users.length} exist`);
+
     res.json({
-      data: transformedSuggestions,
+      data: result,
     });
   } catch (error) {
+    console.error('❌ [VALIDATE MENTIONS] Error:', error);
     throw error;
   }
 };

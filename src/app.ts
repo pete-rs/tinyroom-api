@@ -8,9 +8,11 @@ import { asyncHandler } from './utils/asyncHandler';
 // Import routes
 import authRoutes from './routes/auth';
 import userRoutes from './routes/users';
+import userSearchRoutes from './routes/userSearch';
 import roomRoutes from './routes/rooms';
 import uploadRoutes from './routes/upload';
 import notificationRoutes from './routes/notifications';
+import notificationSettingsRoutes from './routes/notificationSettings';
 import horoscopeRoutes from './routes/horoscope';
 import followRoutes from './routes/follow';
 import roomReactionRoutes from './routes/roomReactions';
@@ -153,9 +155,11 @@ app.post('/api/test/token', asyncHandler(async (req: Request, res: Response) => 
 // Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/users', userRoutes);
+app.use('/api/users', userSearchRoutes); // Mention search routes
 app.use('/api/rooms', roomRoutes);
 app.use('/api/upload', uploadRoutes);
 app.use('/api/notifications', notificationRoutes);
+app.use('/api/notifications', notificationSettingsRoutes); // Player ID update
 app.use('/api/horoscope', horoscopeRoutes);
 app.use('/api', followRoutes);
 app.use('/api', roomReactionRoutes);
