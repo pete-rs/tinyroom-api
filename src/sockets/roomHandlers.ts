@@ -143,6 +143,25 @@ export const setupRoomHandlers = (io: Server, socket: SocketWithUser) => {
         color: participant.color,
       });
 
+      // Get room background info
+      const roomInfo = await prisma.room.findUnique({
+        where: { id: roomId },
+        select: {
+          backgroundColor: true,
+          backgroundImageUrl: true,
+          backgroundImageThumbUrl: true,
+        },
+      });
+
+      // Send room background info
+      if (roomInfo && (roomInfo.backgroundColor || roomInfo.backgroundImageUrl)) {
+        socket.emit('room:background', {
+          backgroundColor: roomInfo.backgroundColor,
+          backgroundImageUrl: roomInfo.backgroundImageUrl,
+          backgroundImageThumbUrl: roomInfo.backgroundImageThumbUrl,
+        });
+      }
+
       console.log(`📊 [Room ${roomId}] Sending ${elements.length} existing elements to joining user`);
 
       if (elements.length > 0) {
@@ -971,6 +990,25 @@ export const setupRoomHandlers = (io: Server, socket: SocketWithUser) => {
     } catch (error) {
       console.error('Error clearing room:', error);
       socket.emit('error', { message: 'Failed to clear room' });
+    }
+  });
+
+  // Handle room background change (for real-time updates after REST API calls)
+  socket.on('room:background:update', async (data: { roomId: string; backgroundColor?: string; backgroundImageUrl?: string; backgroundImageThumbUrl?: string }) => {
+    try {
+      console.log(`🎨 [Room ${data.roomId}] Background update notification from ${socket.userId}`);
+      
+      // Verify the user is in the room
+      const rooms = Array.from(socket.rooms);
+      if (!rooms.includes(data.roomId)) {
+        console.log(`❌ [Room ${data.roomId}] User ${socket.userId} not in room`);
+        return;
+      }
+      
+      // Note: The REST API already handles the broadcast via socketService
+      // This handler is kept for potential future use or manual triggers
+    } catch (error) {
+      console.error('Error handling room background update:', error);
     }
   });
 

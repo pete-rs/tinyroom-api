@@ -60,6 +60,9 @@ model Room {
   commentCount  Int      @default(0) @map("comment_count") // Track total number of comments
   isActive     Boolean  @default(true) @map("is_active")
   isPublic     Boolean  @default(false) @map("is_public") // Room visibility: false = private (default), true = public
+  backgroundColor String? @map("background_color") // Hex color for room background (e.g., "#FFFFFF")
+  backgroundImageUrl String? @map("background_image_url") // Cloudinary URL for background image
+  backgroundImageThumbUrl String? @map("background_image_thumb_url") // 400px thumbnail for quick loading
   
   participants RoomParticipant[]
   elements     Element[]

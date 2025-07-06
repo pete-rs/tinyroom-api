@@ -193,6 +193,7 @@ export const createRoom = async (req: AuthRequest, res: Response) => {
       data: {
         name: name.trim(),
         createdBy: req.user.id,
+        backgroundColor: '#FFFFFF', // Default white background
         participants: {
           create: participantData,
         },
@@ -920,6 +921,91 @@ export const updateRoomName = async (req: AuthRequest, res: Response) => {
         });
       });
     }
+  } catch (error) {
+    throw error;
+  }
+};
+
+export const updateRoomBackground = async (req: AuthRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { backgroundColor, backgroundImageUrl, backgroundImageThumbUrl } = req.body;
+
+    if (!req.user) {
+      throw new AppError(401, 'UNAUTHORIZED', 'User not authenticated');
+    }
+
+    // Validate hex color if provided
+    if (backgroundColor && !/^#[0-9A-F]{6}$/i.test(backgroundColor)) {
+      throw new AppError(400, 'INVALID_COLOR', 'Background color must be a valid hex color (e.g., #FFFFFF)');
+    }
+
+    // Check if user is a participant in the room
+    const room = await prisma.room.findFirst({
+      where: {
+        id,
+        participants: {
+          some: {
+            userId: req.user.id,
+          },
+        },
+      },
+    });
+
+    if (!room) {
+      throw new AppError(403, 'FORBIDDEN', 'Only room participants can update the room background');
+    }
+
+    // Make background color and image mutually exclusive
+    let updateData: any = {};
+    
+    if (backgroundColor !== undefined) {
+      // Setting a color clears the image
+      updateData.backgroundColor = backgroundColor;
+      updateData.backgroundImageUrl = null;
+      updateData.backgroundImageThumbUrl = null;
+    } else if (backgroundImageUrl !== undefined || backgroundImageThumbUrl !== undefined) {
+      // Setting an image clears the color
+      updateData.backgroundColor = null;
+      updateData.backgroundImageUrl = backgroundImageUrl || null;
+      updateData.backgroundImageThumbUrl = backgroundImageThumbUrl || null;
+    }
+
+    // Update room background
+    const updatedRoom = await prisma.room.update({
+      where: { id },
+      data: updateData,
+      include: {
+        creator: {
+          select: userSelect,
+        },
+        participants: {
+          include: {
+            user: {
+              select: userSelect,
+            },
+          },
+        },
+      },
+    });
+
+    // Emit socket event to all participants
+    socketService.emitToRoom(id, 'room:background-changed', {
+      roomId: id,
+      backgroundColor: updatedRoom.backgroundColor,
+      backgroundImageUrl: updatedRoom.backgroundImageUrl,
+      backgroundImageThumbUrl: updatedRoom.backgroundImageThumbUrl,
+      changedBy: req.user.id,
+    });
+
+    res.json({
+      data: {
+        id: updatedRoom.id,
+        backgroundColor: updatedRoom.backgroundColor,
+        backgroundImageUrl: updatedRoom.backgroundImageUrl,
+        backgroundImageThumbUrl: updatedRoom.backgroundImageThumbUrl,
+      },
+    });
   } catch (error) {
     throw error;
   }

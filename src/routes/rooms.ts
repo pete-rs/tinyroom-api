@@ -9,6 +9,7 @@ import {
   getRoomsGroupedByPerson,
   updateRoomName,
   updateRoomVisibility,
+  updateRoomBackground,
   getMyRooms,
   deleteRoom,
   permanentlyLeaveRoom,
@@ -40,6 +41,7 @@ router.get('/:id', asyncHandler(getRoom));
 router.get('/:id/test-public', asyncHandler(testRoomPublicStatus)); // Debug endpoint
 router.put('/:id/name', asyncHandler(updateRoomName));
 router.put('/:id/visibility', asyncHandler(updateRoomVisibility)); // Toggle public/private
+router.put('/:id/background', asyncHandler(updateRoomBackground)); // Update background color/image
 router.post('/:id/join', asyncHandler(joinRoom));
 router.post('/:id/leave', asyncHandler(leaveRoom)); // Temporary leave (mark as inactive)
 router.delete('/:id/leave', asyncHandler(permanentlyLeaveRoom)); // Permanent leave (remove participant)

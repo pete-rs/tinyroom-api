@@ -225,6 +225,85 @@ export const uploadAudio = async (req: AuthRequest, res: Response) => {
   }
 };
 
+export const uploadBackgroundImage = async (req: AuthRequest, res: Response) => {
+  if (!req.file) {
+    throw new AppError(400, 'NO_FILE', 'No file uploaded');
+  }
+
+  if (!req.user) {
+    throw new AppError(401, 'UNAUTHORIZED', 'User not authenticated');
+  }
+
+  try {
+    console.log('🎨 [BACKGROUND UPLOAD] Starting upload:', {
+      fileSize: req.file.size,
+      mimetype: req.file.mimetype,
+      userId: req.user.id,
+    });
+
+    // Upload to Cloudinary with eager transformations for thumbnail
+    const uploadPromise = new Promise<{ backgroundImageUrl: string; backgroundImageThumbUrl: string }>((resolve, reject) => {
+      const uploadConfig: any = {
+        folder: 'room-backgrounds',
+        resource_type: 'image',
+        public_id: `background_${req.user!.id}_${Date.now()}`,
+        // Apply quality optimization to reduce file size
+        transformation: [
+          { 
+            quality: 'auto:good',
+            fetch_format: 'auto',
+          }
+        ],
+        // Create a 400px wide thumbnail for quick loading
+        eager: [
+          { 
+            width: 400, 
+            quality: 'auto:low',
+            fetch_format: 'auto'
+          },
+        ],
+        eager_async: false, // Generate synchronously for immediate availability
+      };
+
+      const uploadStream = cloudinary.uploader.upload_stream(
+        uploadConfig,
+        (error, result) => {
+          if (error) {
+            reject(error);
+          } else if (result) {
+            // Extract the eager transformation URL for thumbnail
+            const backgroundImageThumbUrl = result.eager?.[0]?.secure_url || result.secure_url;
+            resolve({
+              backgroundImageUrl: result.secure_url,
+              backgroundImageThumbUrl,
+            });
+          } else {
+            reject(new Error('Upload failed'));
+          }
+        }
+      );
+
+      uploadStream.end(req.file!.buffer);
+    });
+
+    const { backgroundImageUrl, backgroundImageThumbUrl } = await uploadPromise;
+
+    const response = {
+      data: {
+        backgroundImageUrl,
+        backgroundImageThumbUrl,
+      },
+    };
+
+    console.log('🎨 [BACKGROUND UPLOAD] Response:', JSON.stringify(response, null, 2));
+
+    res.json(response);
+  } catch (error) {
+    console.error('Background image upload error:', error);
+    throw new AppError(500, 'UPLOAD_FAILED', 'Failed to upload background image');
+  }
+};
+
 export const uploadVideo = async (req: AuthRequest, res: Response) => {
   if (!req.file) {
     throw new AppError(400, 'NO_FILE', 'No file uploaded');

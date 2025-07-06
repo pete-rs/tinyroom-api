@@ -141,8 +141,12 @@ Users with incomplete profiles (username starting with `user_`) are blocked from
   - Creator should NOT be included in participantIds
 - `GET /api/rooms/grouped-by-person` - **LEGACY** Get rooms organized by person
 - `GET /api/rooms` - List user's rooms (legacy, kept for compatibility)
-- `GET /api/rooms/:id` - Get room details with elements
+- `GET /api/rooms/:id` - Get room details with elements (includes backgroundColor, backgroundImageUrl, backgroundImageThumbUrl)
 - `PUT /api/rooms/:id/name` - Update room name (body: `{ name }`)
+- `PUT /api/rooms/:id/background` - Update room background (any participant)
+  - Body: `{ backgroundColor: "#FF6B6B", backgroundImageUrl: "...", backgroundImageThumbUrl: "..." }`
+  - All fields optional, color and image are mutually exclusive
+  - Setting color clears image, setting image clears color
 - `POST /api/rooms/:id/join` - Join a room (updates lastVisitedAt for unread tracking)
 - `POST /api/rooms/:id/leave` - Leave a room
 - `GET /api/rooms/:id/elements` - Get room elements
@@ -162,6 +166,13 @@ Users with incomplete profiles (username starting with `user_`) are blocked from
   - Max size: 25MB
   - Supported formats: MP3, M4A, WAV, WebM, OGG, AAC
   - Returns: URL, duration (in seconds), format, size
+
+- `POST /api/upload/background` - Upload background image for rooms
+  - Method: POST
+  - Content-Type: multipart/form-data
+  - Field name: "background" (required)
+  - Max size: 10MB
+  - Returns: backgroundImageUrl (full size), backgroundImageThumbUrl (400px)
 
 ## Real-time Features (Socket.io)
 
@@ -198,6 +209,8 @@ Users with incomplete profiles (username starting with `user_`) are blocked from
 - `element:deleted` - Element removed
 - `element:z-index-changed` - Element z-index updated (includes elementId, zIndex)
 - `room:cleared` - All elements cleared
+- `room:background` - Room background info sent when joining (backgroundColor, backgroundImageUrl, backgroundImageThumbUrl)
+- `room:background-changed` - Room background updated (includes all background fields and changedBy)
 - `room:rejoin-needed` - Socket needs to rejoin room (includes roomId)
 - `error` - Error message
 
