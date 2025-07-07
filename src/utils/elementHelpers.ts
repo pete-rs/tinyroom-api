@@ -18,7 +18,7 @@ export async function getElementsWithReactions(roomId: string, userId: string) {
     },
   });
 
-  // Return elements without reaction/comment data (now at room level)
+  // Return elements (reactions and comments are now at room level)
   return elements.map(element => ({
     id: element.id,
     roomId: element.roomId,
@@ -31,6 +31,7 @@ export async function getElementsWithReactions(roomId: string, userId: string) {
     audioUrl: element.audioUrl,
     videoUrl: element.videoUrl,
     thumbnailUrl: element.thumbnailUrl,
+    smallThumbnailUrl: element.smallThumbnailUrl,
     duration: element.duration,
     width: element.width,
     height: element.height,
@@ -42,7 +43,11 @@ export async function getElementsWithReactions(roomId: string, userId: string) {
     createdAt: element.createdAt,
     updatedAt: element.updatedAt,
     creator: element.creator,
-    // Legacy fields for backward compatibility - always empty
+    // Photo style fields
+    imageAlphaMaskUrl: element.imageAlphaMaskUrl,
+    imageThumbnailAlphaMaskUrl: element.imageThumbnailAlphaMaskUrl,
+    selectedStyle: element.selectedStyle,
+    // Empty fields for room-level features
     reactions: {
       count: 0,
       hasReacted: false,

@@ -1,6 +1,6 @@
 import { Server, Socket } from 'socket.io';
 import { prisma } from '../config/prisma';
-import { ElementType, NotificationType } from '@prisma/client';
+import { ElementType, NotificationType, PhotoStyle } from '@prisma/client';
 import { NotificationService } from '../services/notificationService';
 import { InAppNotificationService } from '../services/inAppNotificationService';
 import { getElementsWithReactions } from '../utils/elementHelpers';
@@ -34,11 +34,16 @@ interface ElementCreateData {
   audioUrl?: string;
   videoUrl?: string;
   thumbnailUrl?: string;
+  smallThumbnailUrl?: string;
   duration?: number;
   rotation?: number;
   scaleX?: number;
   scaleY?: number;
   stickerText?: string;
+  // Photo style fields
+  imageAlphaMaskUrl?: string;
+  imageThumbnailAlphaMaskUrl?: string;
+  selectedStyle?: string;
 }
 
 interface ElementUpdateData {
@@ -187,6 +192,10 @@ export const setupRoomHandlers = (io: Server, socket: SocketWithUser) => {
             stickerText: element.stickerText,
             zIndex: element.zIndex,
             reactions: element.reactions,
+            // Photo style fields
+            imageAlphaMaskUrl: element.imageAlphaMaskUrl,
+            imageThumbnailAlphaMaskUrl: element.imageThumbnailAlphaMaskUrl,
+            selectedStyle: element.selectedStyle,
             stats: {
               totalComments: element.comments?.count || 0,
               totalReactions: element.reactions?.count || 0,
@@ -222,6 +231,10 @@ export const setupRoomHandlers = (io: Server, socket: SocketWithUser) => {
               stickerText: element.stickerText,
               zIndex: element.zIndex,
               reactions: element.reactions,
+              // Photo style fields
+              imageAlphaMaskUrl: element.imageAlphaMaskUrl,
+              imageThumbnailAlphaMaskUrl: element.imageThumbnailAlphaMaskUrl,
+              selectedStyle: element.selectedStyle,
               stats: {
                 totalComments: element.comments?.count || 0,
                 totalReactions: element.reactions?.count || 0,
@@ -334,7 +347,12 @@ export const setupRoomHandlers = (io: Server, socket: SocketWithUser) => {
   // Element management
   socket.on('element:create', async (data: ElementCreateData, callback?: Function) => {
     try {
-      const { roomId, type, positionX, positionY, width, height, content, imageUrl, audioUrl, videoUrl, thumbnailUrl, duration, rotation, scaleX, scaleY, stickerText } = data;
+      const { 
+        roomId, type, positionX, positionY, width, height, content, 
+        imageUrl, audioUrl, videoUrl, thumbnailUrl, smallThumbnailUrl, duration, 
+        rotation, scaleX, scaleY, stickerText,
+        imageAlphaMaskUrl, imageThumbnailAlphaMaskUrl, selectedStyle 
+      } = data;
       console.log(`📦 [Room ${roomId}] User ${socket.userId} creating ${type.toUpperCase()} element at (${positionX}, ${positionY})`);
 
       // Verify user is in room and room is not locked
@@ -381,11 +399,15 @@ export const setupRoomHandlers = (io: Server, socket: SocketWithUser) => {
           audioUrl: audioUrl || null,
           videoUrl: videoUrl || null,
           thumbnailUrl: thumbnailUrl || null,
+          smallThumbnailUrl: smallThumbnailUrl || null,
           duration: duration || null,
           rotation: rotation || 0,
           scaleX: scaleX || 1,
           scaleY: scaleY || 1,
           stickerText: stickerText || null,
+          imageAlphaMaskUrl: imageAlphaMaskUrl || null,
+          imageThumbnailAlphaMaskUrl: imageThumbnailAlphaMaskUrl || null,
+          selectedStyle: selectedStyle as PhotoStyle | null || (imageAlphaMaskUrl ? 'squared_photo' as PhotoStyle : null),
           zIndex: newZIndex,
         },
         include: {
@@ -424,6 +446,7 @@ export const setupRoomHandlers = (io: Server, socket: SocketWithUser) => {
           audioUrl: element.audioUrl,
           videoUrl: element.videoUrl,
           thumbnailUrl: element.thumbnailUrl,
+          smallThumbnailUrl: element.smallThumbnailUrl,
           duration: element.duration,
           createdBy: element.createdBy,
           createdAt: element.createdAt,
@@ -432,6 +455,9 @@ export const setupRoomHandlers = (io: Server, socket: SocketWithUser) => {
           scaleX: element.scaleX,
           scaleY: element.scaleY,
           stickerText: element.stickerText,
+          imageAlphaMaskUrl: element.imageAlphaMaskUrl,
+          imageThumbnailAlphaMaskUrl: element.imageThumbnailAlphaMaskUrl,
+          selectedStyle: element.selectedStyle,
           zIndex: element.zIndex,
           reactions: {
             count: 0,
@@ -1013,6 +1039,76 @@ export const setupRoomHandlers = (io: Server, socket: SocketWithUser) => {
   });
 
   // Handle disconnect (called from index.ts)
+  // Handle photo style update
+  socket.on('element:photo-style', async (data: { roomId: string; elementId: string; selectedStyle: string }) => {
+    try {
+      const { roomId, elementId, selectedStyle } = data;
+      
+      console.log(`🎨 [Room ${roomId}] User ${socket.userId} updating photo style for element ${elementId} to ${selectedStyle}`);
+      
+      // Verify user is in room
+      const rooms = Array.from(socket.rooms);
+      if (!rooms.includes(roomId)) {
+        console.log(`❌ [Room ${roomId}] User ${socket.userId} not in room for photo style update`);
+        socket.emit('error', { message: 'Not in room' });
+        socket.emit('room:rejoin-needed', { roomId });
+        return;
+      }
+      
+      // Validate style
+      const validStyles = ['squared_photo', 'rounded_photo', 'polaroid_photo', 'cutout', 'cutout_white_sticker', 'cutout_black_sticker'];
+      if (!validStyles.includes(selectedStyle)) {
+        console.log(`❌ Invalid photo style: ${selectedStyle}`);
+        socket.emit('error', { message: 'Invalid photo style' });
+        return;
+      }
+      
+      // Check if element exists and is a photo
+      const element = await prisma.element.findFirst({
+        where: {
+          id: elementId,
+          roomId: roomId,
+          type: 'PHOTO',
+          deletedAt: null,
+        },
+      });
+      
+      if (!element) {
+        console.log(`❌ [Room ${roomId}] Photo element ${elementId} not found`);
+        socket.emit('error', { message: 'Photo element not found' });
+        return;
+      }
+      
+      // Check if style requires alpha mask
+      const cutoutStyles = ['cutout', 'cutout_white_sticker', 'cutout_black_sticker'];
+      if (cutoutStyles.includes(selectedStyle) && !element.imageAlphaMaskUrl) {
+        console.log(`❌ [Room ${roomId}] Photo element ${elementId} cannot use cutout style (no alpha mask)`);
+        socket.emit('error', { message: 'Cutout styles require an alpha mask' });
+        return;
+      }
+      
+      // Update the photo style
+      await prisma.element.update({
+        where: { id: elementId },
+        data: { selectedStyle: selectedStyle as PhotoStyle },
+      });
+      
+      console.log(`✅ [Room ${roomId}] Photo style updated for element ${elementId}`);
+      
+      // Broadcast style change to all participants
+      io.to(roomId).emit('element:photo-style-changed', {
+        elementId,
+        selectedStyle,
+        userId: socket.userId,
+      });
+      
+      console.log(`📤 [Room ${roomId}] Broadcasted element:photo-style-changed to all participants`);
+    } catch (error) {
+      console.error('Error updating photo style:', error);
+      socket.emit('error', { message: 'Failed to update photo style' });
+    }
+  });
+
   socket.on('disconnect', async () => {
     try {
       // Get all rooms the user is active in

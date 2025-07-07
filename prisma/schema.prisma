@@ -106,6 +106,11 @@ model Element {
   smallThumbnailUrl String? @map("small_thumbnail_url") // 180px thumbnail for feed previews
   duration   Float?    // Audio/video duration in seconds
   stickerText String?  @map("sticker_text") // Optional custom text for LINK elements
+  
+  // Photo style fields (for PHOTO elements only)
+  imageAlphaMaskUrl String? @map("image_alpha_mask_url") // Full-size alpha mask for cutout styles
+  imageThumbnailAlphaMaskUrl String? @map("image_thumbnail_alpha_mask_url") // Thumbnail alpha mask
+  selectedStyle PhotoStyle? @map("selected_style") @default(squared_photo) // Current display style
   width      Float
   height     Float
   rotation   Float     @default(0) @map("rotation") // Rotation in degrees (0-360)
@@ -130,6 +135,15 @@ enum ElementType {
   HOROSCOPE
   VIDEO
   LINK
+}
+
+enum PhotoStyle {
+  squared_photo
+  rounded_photo
+  polaroid_photo
+  cutout
+  cutout_white_sticker
+  cutout_black_sticker
 }
 
 enum NotificationType {

@@ -415,3 +415,150 @@ export const uploadVideo = async (req: AuthRequest, res: Response) => {
     throw new AppError(500, 'UPLOAD_FAILED', 'Failed to upload video');
   }
 };
+
+export const uploadPhotoWithMask = async (req: AuthRequest, res: Response) => {
+  if (!req.files || typeof req.files !== 'object') {
+    throw new AppError(400, 'NO_FILES', 'No files uploaded');
+  }
+
+  const files = req.files as { [fieldname: string]: Express.Multer.File[] };
+  
+  // Validate required files - image and thumbnail are always required
+  if (!files.image?.[0] || !files.thumbnail?.[0]) {
+    throw new AppError(400, 'MISSING_FILES', 'Missing required files. Expected: image and thumbnail (alphaMask and thumbnailMask are optional)');
+  }
+
+  if (!req.user) {
+    throw new AppError(401, 'UNAUTHORIZED', 'User not authenticated');
+  }
+
+  try {
+    const hasMasks = files.alphaMask?.[0] && files.thumbnailMask?.[0];
+    
+    console.log('🎭 [PHOTO WITH MASK UPLOAD] Starting upload:', {
+      userId: req.user.id,
+      imageSize: files.image[0].size,
+      thumbnailSize: files.thumbnail[0].size,
+      hasMasks: !!hasMasks,
+      maskSize: files.alphaMask?.[0]?.size || 0,
+      thumbnailMaskSize: files.thumbnailMask?.[0]?.size || 0,
+    });
+
+    const timestamp = Date.now();
+    const basePublicId = `photo_${req.user.id}_${timestamp}`;
+
+    // Build upload promises array based on what files are provided
+    const uploadPromises: Promise<string | null>[] = [
+      // Original image (JPEG) - always required
+      new Promise<string>((resolve, reject) => {
+        cloudinary.uploader.upload_stream(
+          {
+            folder: 'room-photos',
+            resource_type: 'image',
+            public_id: `${basePublicId}_original`,
+            format: 'jpg',
+            quality: 'auto:good',
+            timeout: 60000, // 60 second timeout
+          },
+          (error, result) => {
+            if (error) reject(error);
+            else if (result) resolve(result.secure_url);
+            else reject(new Error('Upload failed'));
+          }
+        ).end(files.image[0].buffer);
+      }),
+      
+      // Alpha mask (PNG grayscale) - optional
+      hasMasks 
+        ? new Promise<string>((resolve, reject) => {
+            cloudinary.uploader.upload_stream(
+              {
+                folder: 'room-photos',
+                resource_type: 'image',
+                public_id: `${basePublicId}_mask`,
+                format: 'png',
+                quality: 'auto:low',
+                timeout: 60000, // 60 second timeout
+              },
+              (error, result) => {
+                if (error) reject(error);
+                else if (result) resolve(result.secure_url);
+                else reject(new Error('Upload failed'));
+              }
+            ).end(files.alphaMask![0].buffer);
+          })
+        : Promise.resolve(null),
+      
+      // Thumbnail (JPEG) - always required
+      new Promise<string>((resolve, reject) => {
+        cloudinary.uploader.upload_stream(
+          {
+            folder: 'room-photos',
+            resource_type: 'image',
+            public_id: `${basePublicId}_thumb`,
+            format: 'jpg',
+            quality: 'auto',
+            timeout: 60000, // 60 second timeout
+          },
+          (error, result) => {
+            if (error) reject(error);
+            else if (result) resolve(result.secure_url);
+            else reject(new Error('Upload failed'));
+          }
+        ).end(files.thumbnail[0].buffer);
+      }),
+      
+      // Thumbnail mask (PNG grayscale) - optional
+      hasMasks
+        ? new Promise<string>((resolve, reject) => {
+            cloudinary.uploader.upload_stream(
+              {
+                folder: 'room-photos',
+                resource_type: 'image',
+                public_id: `${basePublicId}_thumb_mask`,
+                format: 'png',
+                quality: 'auto:low',
+                timeout: 60000, // 60 second timeout
+              },
+              (error, result) => {
+                if (error) reject(error);
+                else if (result) resolve(result.secure_url);
+                else reject(new Error('Upload failed'));
+              }
+            ).end(files.thumbnailMask![0].buffer);
+          })
+        : Promise.resolve(null),
+    ];
+
+    let results;
+    try {
+      results = await Promise.all(uploadPromises);
+    } catch (uploadError: any) {
+      console.error('🚨 [PHOTO WITH MASK UPLOAD] Upload error details:', {
+        error: uploadError,
+        message: uploadError.message,
+        http_code: uploadError.http_code,
+        name: uploadError.name,
+      });
+      throw uploadError;
+    }
+
+    const [imageUrl, imageAlphaMaskUrl, smallThumbnailUrl, imageThumbnailAlphaMaskUrl] = results;
+
+    const response = {
+      data: {
+        imageUrl: imageUrl!,
+        imageAlphaMaskUrl,
+        smallThumbnailUrl: smallThumbnailUrl!,
+        imageThumbnailAlphaMaskUrl,
+      },
+    };
+
+    console.log('🎭 [PHOTO WITH MASK UPLOAD] Success:', response);
+
+    res.json(response);
+  } catch (error) {
+    console.error('Photo with mask upload error:', error);
+    throw new AppError(500, 'UPLOAD_FAILED', 'Failed to upload photo with mask');
+  }
+};

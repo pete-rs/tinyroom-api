@@ -2,7 +2,7 @@ import { Router } from 'express';
 import multer from 'multer';
 import { authMiddleware } from '../middleware/auth';
 import { asyncHandler } from '../utils/asyncHandler';
-import { uploadAvatar, uploadImage, uploadAudio, uploadVideo, uploadBackgroundImage } from '../controllers/uploadController';
+import { uploadAvatar, uploadImage, uploadAudio, uploadVideo, uploadBackgroundImage, uploadPhotoWithMask } from '../controllers/uploadController';
 
 const router = Router();
 
@@ -87,5 +87,34 @@ router.post('/video', authMiddleware as any, videoUpload.single('video'), asyncH
 
 // Background image upload endpoint
 router.post('/background', authMiddleware as any, imageUpload.single('background'), asyncHandler(uploadBackgroundImage));
+
+// Configure multer for photo with mask uploads (multiple files)
+const photoWithMaskUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 10 * 1024 * 1024, // 10MB max per file
+  },
+  fileFilter: (req, file, cb) => {
+    // Accept only images
+    if (file.mimetype.startsWith('image/')) {
+      cb(null, true);
+    } else {
+      cb(new Error('Only image files are allowed'));
+    }
+  },
+});
+
+// Photo with mask upload endpoint (for new photo style feature)
+router.post(
+  '/photo-with-mask', 
+  authMiddleware as any, 
+  photoWithMaskUpload.fields([
+    { name: 'image', maxCount: 1 },
+    { name: 'alphaMask', maxCount: 1 },
+    { name: 'thumbnail', maxCount: 1 },
+    { name: 'thumbnailMask', maxCount: 1 }
+  ]), 
+  asyncHandler(uploadPhotoWithMask)
+);
 
 export default router;

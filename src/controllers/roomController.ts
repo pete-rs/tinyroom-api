@@ -1152,6 +1152,82 @@ export const deleteElement = async (req: AuthRequest, res: Response) => {
   }
 };
 
+export const updateElementPhotoStyle = async (req: AuthRequest, res: Response) => {
+  const { roomId, elementId } = req.params;
+  const { selectedStyle } = req.body;
+
+  if (!req.user) {
+    throw new AppError(401, 'UNAUTHORIZED', 'User not authenticated');
+  }
+
+  if (!selectedStyle) {
+    throw new AppError(400, 'INVALID_REQUEST', 'selectedStyle is required');
+  }
+
+  const validStyles = ['squared_photo', 'rounded_photo', 'polaroid_photo', 'cutout', 'cutout_white_sticker', 'cutout_black_sticker'];
+  if (!validStyles.includes(selectedStyle)) {
+    throw new AppError(400, 'INVALID_STYLE', 'Invalid photo style');
+  }
+
+  try {
+    // Check if user is a participant in the room
+    const participant = await prisma.roomParticipant.findUnique({
+      where: {
+        roomId_userId: {
+          roomId,
+          userId: req.user.id,
+        },
+      },
+    });
+
+    if (!participant) {
+      throw new AppError(403, 'FORBIDDEN', 'You are not a participant in this room');
+    }
+
+    // Check if element exists and is a photo
+    const element = await prisma.element.findFirst({
+      where: {
+        id: elementId,
+        roomId: roomId,
+        type: 'PHOTO',
+        deletedAt: null,
+      },
+    });
+
+    if (!element) {
+      throw new AppError(404, 'NOT_FOUND', 'Photo element not found');
+    }
+
+    // Check if style requires alpha mask
+    const cutoutStyles = ['cutout', 'cutout_white_sticker', 'cutout_black_sticker'];
+    if (cutoutStyles.includes(selectedStyle) && !element.imageAlphaMaskUrl) {
+      throw new AppError(400, 'NO_ALPHA_MASK', 'Cutout styles require an alpha mask');
+    }
+
+    // Update the photo style
+    const updatedElement = await prisma.element.update({
+      where: { id: elementId },
+      data: { selectedStyle },
+      select: {
+        id: true,
+        selectedStyle: true,
+      },
+    });
+
+    // Note: Room's updatedAt is NOT updated for style changes to avoid affecting room ordering
+
+    res.json({
+      data: {
+        element: updatedElement,
+      },
+    });
+  } catch (error) {
+    console.error('Error updating photo style:', error);
+    if (error instanceof AppError) throw error;
+    throw new AppError(500, 'INTERNAL_ERROR', 'Failed to update photo style');
+  }
+};
+
 export const permanentlyLeaveRoom = async (req: AuthRequest, res: Response) => {
   try {
     const { id } = req.params;
