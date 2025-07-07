@@ -9,8 +9,11 @@ import fetch from 'node-fetch';
 const jwksClient = jwksRsa({
   jwksUri: `https://${config.auth0.domain}/.well-known/jwks.json`,
   cache: true,
+  cacheMaxEntries: 10,
+  cacheMaxAge: 10 * 60 * 60 * 1000, // 10 hours
   rateLimit: true,
-  jwksRequestsPerMinute: 5,
+  jwksRequestsPerMinute: 10, // Increased from 5 to 10
+  timeout: 30000, // 30 seconds timeout
 });
 
 // Simple in-memory cache for opaque tokens
@@ -28,6 +31,9 @@ let lastRateLimitTime = 0;
 function getKey(header: jwt.JwtHeader, callback: jwt.SigningKeyCallback) {
   jwksClient.getSigningKey(header.kid!, (err, key) => {
     if (err) {
+      console.error('Error fetching signing key:', err.message);
+      // If it's a rate limit error, we could potentially use a cached key
+      // but for now, just pass the error through
       callback(err);
     } else {
       const signingKey = key?.getPublicKey();

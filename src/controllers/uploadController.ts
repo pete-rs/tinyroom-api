@@ -169,9 +169,9 @@ export const uploadAvatar = async (req: AuthRequest, res: Response) => {
         avatarUrl,
       },
     });
-  } catch (error) {
+  } catch (error: any) {
     console.error('Avatar upload error:', error);
-    throw new AppError(500, 'UPLOAD_FAILED', 'Failed to upload avatar');
+    throw new AppError(500, 'UPLOAD_FAILED', `Failed to upload avatar: ${error.message}`);
   }
 };
 
@@ -313,7 +313,10 @@ export const uploadVideo = async (req: AuthRequest, res: Response) => {
     throw new AppError(401, 'UNAUTHORIZED', 'User not authenticated');
   }
 
+  const startTime = Date.now();
+  
   try {
+    
     // Validate file size (50MB max)
     const maxSizeBytes = 50 * 1024 * 1024; // 50MB
     if (req.file.size > maxSizeBytes) {
@@ -335,10 +338,24 @@ export const uploadVideo = async (req: AuthRequest, res: Response) => {
     // Get video duration from the request if provided
     const duration = req.body.duration ? parseFloat(req.body.duration) : undefined;
 
+    console.log('📹 Starting video upload to Cloudinary:', {
+      fileSize: req.file.size,
+      fileSizeMB: (req.file.size / (1024 * 1024)).toFixed(2) + 'MB',
+      duration: duration,
+      mimeType: req.file.mimetype,
+    });
+
     // Upload video file to Cloudinary with transformations
     const uploadPromise = new Promise<{ videoUrl: string; thumbnailUrl: string; smallThumbnailUrl: string }>((resolve, reject) => {
       const timestamp = Date.now();
       const publicId = `video_${req.user!.id}_${timestamp}`;
+
+      console.log('📹 Cloudinary upload config:', {
+        publicId,
+        folder: 'room-videos',
+        resourceType: 'video',
+        transformations: 'duration: 10s, quality: auto:good',
+      });
 
       const uploadStream = cloudinary.uploader.upload_stream(
         {
@@ -355,13 +372,30 @@ export const uploadVideo = async (req: AuthRequest, res: Response) => {
             // Generate small thumbnail at 2 seconds
             { width: 180, height: 180, crop: 'limit', start_offset: '2', format: 'jpg' },
           ],
-          eager_async: false,
+          eager_async: true, // Changed to async to avoid timeout
+          chunk_size: 6000000, // 6MB chunks for large files
         },
         (error, result) => {
+          const uploadDuration = Date.now() - timestamp;
+          
           if (error) {
-            console.error('Cloudinary upload error:', error);
+            console.error('📹 Cloudinary upload error:', {
+              error,
+              uploadDuration: uploadDuration + 'ms',
+              errorCode: error.http_code,
+              errorMessage: error.message,
+            });
             reject(error);
           } else if (result) {
+            console.log('📹 Cloudinary upload successful:', {
+              uploadDuration: uploadDuration + 'ms',
+              publicId: result.public_id,
+              format: result.format,
+              duration: result.duration,
+              bytes: result.bytes,
+              bytesMB: (result.bytes / (1024 * 1024)).toFixed(2) + 'MB',
+            });
+
             // Generate thumbnail URL using Cloudinary transformations
             // Use c_limit to preserve aspect ratio within 400x400 bounds
             const thumbnailUrl = result.secure_url.replace(
@@ -375,7 +409,7 @@ export const uploadVideo = async (req: AuthRequest, res: Response) => {
               '/video/upload/w_180,h_180,c_limit,so_2,f_jpg/'
             );
 
-            console.log('📹 Video uploaded:', {
+            console.log('📹 Video URLs generated:', {
               videoUrl: result.secure_url,
               thumbnailUrl,
               smallThumbnailUrl,
@@ -410,9 +444,17 @@ export const uploadVideo = async (req: AuthRequest, res: Response) => {
     console.log('🎥 [VIDEO UPLOAD] Response:', JSON.stringify(response, null, 2));
 
     res.json(response);
-  } catch (error) {
-    console.error('Video upload error:', error);
-    throw new AppError(500, 'UPLOAD_FAILED', 'Failed to upload video');
+  } catch (error: any) {
+    const totalDuration = Date.now() - startTime;
+    console.error('📹 Video upload failed:', {
+      error: error.message,
+      httpCode: error.http_code,
+      totalDuration: totalDuration + 'ms',
+      totalDurationSeconds: (totalDuration / 1000).toFixed(1) + 's',
+      fileSize: req.file.size,
+      fileSizeMB: (req.file.size / (1024 * 1024)).toFixed(2) + 'MB',
+    });
+    throw new AppError(500, 'UPLOAD_FAILED', `Failed to upload video: ${error.message}`);
   }
 };
 
