@@ -1334,6 +1334,9 @@ export const getMyRooms = async (req: AuthRequest, res: Response) => {
       created_by: string;
       name_set_by: string | null;
       is_public: boolean;
+      background_color: string | null;
+      background_image_url: string | null;
+      background_image_thumb_url: string | null;
       is_creator: boolean;
       element_count: bigint;
       unread_elements: bigint;
@@ -1359,6 +1362,9 @@ export const getMyRooms = async (req: AuthRequest, res: Response) => {
         r.created_by,
         r.name_set_by,
         r.is_public,
+        r.background_color,
+        r.background_image_url,
+        r.background_image_thumb_url,
         r.reaction_count,
         r.last_reaction_at,
         r.comment_count,
@@ -1381,7 +1387,7 @@ export const getMyRooms = async (req: AuthRequest, res: Response) => {
           ))
           FROM room_participants rp2
           JOIN users u ON u.id = rp2.user_id
-          WHERE rp2.room_id = r.id AND rp2.user_id != ${req.user.id}
+          WHERE rp2.room_id = r.id
         ) as participant_data,
         (
           SELECT json_build_object(
@@ -1435,7 +1441,7 @@ export const getMyRooms = async (req: AuthRequest, res: Response) => {
       FROM rooms r
       JOIN room_participants rp ON rp.room_id = r.id AND rp.user_id = ${req.user.id}
       LEFT JOIN elements e ON e.room_id = r.id
-      GROUP BY r.id, r.name, r.created_at, r.updated_at, r.object_added_at, r.created_by, r.name_set_by, r.is_public, r.reaction_count, r.last_reaction_at, r.comments_updated_at, r.comment_count, rp.last_visited_at
+      GROUP BY r.id, r.name, r.created_at, r.updated_at, r.object_added_at, r.created_by, r.name_set_by, r.is_public, r.background_color, r.background_image_url, r.background_image_thumb_url, r.reaction_count, r.last_reaction_at, r.comments_updated_at, r.comment_count, rp.last_visited_at
       ORDER BY GREATEST(r.object_added_at, COALESCE(r.comments_updated_at, r.object_added_at)) DESC
     `;
 
@@ -1503,6 +1509,9 @@ export const getMyRooms = async (req: AuthRequest, res: Response) => {
         createdBy: room.created_by,
         nameSetBy: room.name_set_by,
         isPublic: room.is_public,
+        backgroundColor: room.background_color,
+        backgroundImageUrl: room.background_image_url,
+        backgroundImageThumbUrl: room.background_image_thumb_url,
         creator: room.creator_data,
         nameSetByUser: room.name_set_by_user_data,
         isCreator: room.is_creator,
