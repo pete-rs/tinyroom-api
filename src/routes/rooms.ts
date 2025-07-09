@@ -15,6 +15,7 @@ import {
   permanentlyLeaveRoom,
   deleteElement,
   updateElementPhotoStyle,
+  updateElementLinkStyle,
   addParticipants,
   removeParticipants,
   testRoomPublicStatus,
@@ -50,6 +51,7 @@ router.delete('/:id', asyncHandler(deleteRoom)); // Delete room (creator only)
 router.get('/:id/elements', asyncHandler(getRoomElements));
 router.delete('/:roomId/elements/:elementId', asyncHandler(deleteElement)); // Delete element
 router.put('/:roomId/elements/:elementId/photo-style', asyncHandler(updateElementPhotoStyle)); // Update photo style
+router.put('/:roomId/elements/:elementId/link-style', asyncHandler(updateElementLinkStyle)); // Update link style
 
 // Participant management (creator only)
 router.post('/:id/participants', asyncHandler(addParticipants)); // Add participants to room

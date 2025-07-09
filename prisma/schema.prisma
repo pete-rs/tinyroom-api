@@ -111,6 +111,10 @@ model Element {
   imageAlphaMaskUrl String? @map("image_alpha_mask_url") // Full-size alpha mask for cutout styles
   imageThumbnailAlphaMaskUrl String? @map("image_thumbnail_alpha_mask_url") // Thumbnail alpha mask
   selectedStyle PhotoStyle? @map("selected_style") @default(squared_photo) // Current display style
+  
+  // Link style fields (for LINK elements only)
+  linkStyle LinkStyle? @map("link_style") @default(default) // Current link display style
+  
   width      Float
   height     Float
   rotation   Float     @default(0) @map("rotation") // Rotation in degrees (0-360)
@@ -144,6 +148,13 @@ enum PhotoStyle {
   cutout
   cutout_white_sticker
   cutout_black_sticker
+}
+
+enum LinkStyle {
+  default
+  clear
+  style1
+  style2
 }
 
 enum NotificationType {

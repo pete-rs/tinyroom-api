@@ -1228,6 +1228,76 @@ export const updateElementPhotoStyle = async (req: AuthRequest, res: Response) =
   }
 };
 
+export const updateElementLinkStyle = async (req: AuthRequest, res: Response) => {
+  const { roomId, elementId } = req.params;
+  const { linkStyle } = req.body;
+
+  if (!req.user) {
+    throw new AppError(401, 'UNAUTHORIZED', 'User not authenticated');
+  }
+
+  if (!linkStyle) {
+    throw new AppError(400, 'INVALID_REQUEST', 'linkStyle is required');
+  }
+
+  const validStyles = ['default', 'clear', 'style1', 'style2'];
+  if (!validStyles.includes(linkStyle)) {
+    throw new AppError(400, 'INVALID_STYLE', 'Invalid link style');
+  }
+
+  try {
+    // Check if user is a participant in the room
+    const participant = await prisma.roomParticipant.findUnique({
+      where: {
+        roomId_userId: {
+          roomId,
+          userId: req.user.id,
+        },
+      },
+    });
+
+    if (!participant) {
+      throw new AppError(403, 'FORBIDDEN', 'You are not a participant in this room');
+    }
+
+    // Check if element exists and is a link
+    const element = await prisma.element.findFirst({
+      where: {
+        id: elementId,
+        roomId: roomId,
+        type: 'LINK',
+        deletedAt: null,
+      },
+    });
+
+    if (!element) {
+      throw new AppError(404, 'NOT_FOUND', 'Link element not found');
+    }
+
+    // Update the link style
+    const updatedElement = await prisma.element.update({
+      where: { id: elementId },
+      data: { linkStyle },
+      select: {
+        id: true,
+        linkStyle: true,
+      },
+    });
+
+    // Note: Room's updatedAt is NOT updated for style changes to avoid affecting room ordering
+
+    res.json({
+      data: {
+        element: updatedElement,
+      },
+    });
+  } catch (error) {
+    console.error('Error updating link style:', error);
+    if (error instanceof AppError) throw error;
+    throw new AppError(500, 'INTERNAL_ERROR', 'Failed to update link style');
+  }
+};
+
 export const permanentlyLeaveRoom = async (req: AuthRequest, res: Response) => {
   try {
     const { id } = req.params;

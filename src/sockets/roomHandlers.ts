@@ -1,6 +1,6 @@
 import { Server, Socket } from 'socket.io';
 import { prisma } from '../config/prisma';
-import { ElementType, NotificationType, PhotoStyle } from '@prisma/client';
+import { ElementType, NotificationType, PhotoStyle, LinkStyle } from '@prisma/client';
 import { NotificationService } from '../services/notificationService';
 import { InAppNotificationService } from '../services/inAppNotificationService';
 import { getElementsWithReactions } from '../utils/elementHelpers';
@@ -44,6 +44,8 @@ interface ElementCreateData {
   imageAlphaMaskUrl?: string;
   imageThumbnailAlphaMaskUrl?: string;
   selectedStyle?: string;
+  // Link style fields
+  linkStyle?: string;
 }
 
 interface ElementUpdateData {
@@ -196,6 +198,8 @@ export const setupRoomHandlers = (io: Server, socket: SocketWithUser) => {
             imageAlphaMaskUrl: element.imageAlphaMaskUrl,
             imageThumbnailAlphaMaskUrl: element.imageThumbnailAlphaMaskUrl,
             selectedStyle: element.selectedStyle,
+            // Link style fields
+            linkStyle: element.linkStyle,
             stats: {
               totalComments: element.comments?.count || 0,
               totalReactions: element.reactions?.count || 0,
@@ -235,6 +239,8 @@ export const setupRoomHandlers = (io: Server, socket: SocketWithUser) => {
               imageAlphaMaskUrl: element.imageAlphaMaskUrl,
               imageThumbnailAlphaMaskUrl: element.imageThumbnailAlphaMaskUrl,
               selectedStyle: element.selectedStyle,
+              // Link style fields
+              linkStyle: element.linkStyle,
               stats: {
                 totalComments: element.comments?.count || 0,
                 totalReactions: element.reactions?.count || 0,
@@ -351,7 +357,8 @@ export const setupRoomHandlers = (io: Server, socket: SocketWithUser) => {
         roomId, type, positionX, positionY, width, height, content, 
         imageUrl, audioUrl, videoUrl, thumbnailUrl, smallThumbnailUrl, duration, 
         rotation, scaleX, scaleY, stickerText,
-        imageAlphaMaskUrl, imageThumbnailAlphaMaskUrl, selectedStyle 
+        imageAlphaMaskUrl, imageThumbnailAlphaMaskUrl, selectedStyle,
+        linkStyle 
       } = data;
       console.log(`📦 [Room ${roomId}] User ${socket.userId} creating ${type.toUpperCase()} element at (${positionX}, ${positionY})`);
 
@@ -408,6 +415,7 @@ export const setupRoomHandlers = (io: Server, socket: SocketWithUser) => {
           imageAlphaMaskUrl: imageAlphaMaskUrl || null,
           imageThumbnailAlphaMaskUrl: imageThumbnailAlphaMaskUrl || null,
           selectedStyle: selectedStyle as PhotoStyle | null || (imageAlphaMaskUrl ? 'squared_photo' as PhotoStyle : null),
+          linkStyle: linkStyle as LinkStyle | null || (type.toUpperCase() === 'LINK' ? 'default' as LinkStyle : null),
           zIndex: newZIndex,
         },
         include: {
@@ -458,6 +466,7 @@ export const setupRoomHandlers = (io: Server, socket: SocketWithUser) => {
           imageAlphaMaskUrl: element.imageAlphaMaskUrl,
           imageThumbnailAlphaMaskUrl: element.imageThumbnailAlphaMaskUrl,
           selectedStyle: element.selectedStyle,
+          linkStyle: element.linkStyle,
           zIndex: element.zIndex,
           reactions: {
             count: 0,
@@ -1106,6 +1115,69 @@ export const setupRoomHandlers = (io: Server, socket: SocketWithUser) => {
     } catch (error) {
       console.error('Error updating photo style:', error);
       socket.emit('error', { message: 'Failed to update photo style' });
+    }
+  });
+
+  // Update link style
+  socket.on('element:link-style', async (data: { roomId: string; elementId: string; linkStyle: string }) => {
+    try {
+      const { roomId, elementId, linkStyle } = data;
+      console.log(`🔗 [Room ${roomId}] User ${socket.userId} updating link style for ${elementId} to ${linkStyle}`);
+      
+      // Verify user is in room
+      const participant = await prisma.roomParticipant.findUnique({
+        where: {
+          roomId_userId: {
+            roomId,
+            userId: socket.userId,
+          },
+        },
+      });
+
+      if (!participant) {
+        socket.emit('error', { message: 'Not a participant in this room' });
+        return;
+      }
+
+      // Verify element exists and is a link
+      const element = await prisma.element.findFirst({
+        where: {
+          id: elementId,
+          roomId,
+          type: 'LINK',
+          deletedAt: null,
+        },
+      });
+
+      if (!element) {
+        socket.emit('error', { message: 'Link element not found' });
+        return;
+      }
+
+      // Validate link style
+      const validStyles = ['default', 'clear', 'style1', 'style2'];
+      if (!validStyles.includes(linkStyle)) {
+        socket.emit('error', { message: 'Invalid link style' });
+        return;
+      }
+
+      // Update link style
+      await prisma.element.update({
+        where: { id: elementId },
+        data: { linkStyle: linkStyle as LinkStyle },
+      });
+
+      // Broadcast to all in room
+      io.to(roomId).emit('element:link-style-changed', {
+        elementId,
+        linkStyle,
+        userId: socket.userId,
+      });
+
+      console.log(`📤 [Room ${roomId}] Broadcasted element:link-style-changed to all participants`);
+    } catch (error) {
+      console.error('Error updating link style:', error);
+      socket.emit('error', { message: 'Failed to update link style' });
     }
   });
 

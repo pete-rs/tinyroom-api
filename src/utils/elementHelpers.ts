@@ -47,6 +47,8 @@ export async function getElementsWithReactions(roomId: string, userId: string) {
     imageAlphaMaskUrl: element.imageAlphaMaskUrl,
     imageThumbnailAlphaMaskUrl: element.imageThumbnailAlphaMaskUrl,
     selectedStyle: element.selectedStyle,
+    // Link style fields
+    linkStyle: element.linkStyle,
     // Empty fields for room-level features
     reactions: {
       count: 0,
