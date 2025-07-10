@@ -1,5 +1,6 @@
 import { prisma } from '../config/prisma';
 import { NotificationType, Prisma } from '@prisma/client';
+import { socketService } from './socketService';
 
 interface NotificationData {
   [key: string]: any;
@@ -55,6 +56,17 @@ export class InAppNotificationService {
           },
         });
         console.log(`🔔 [CREATE NOTIFICATION] Created notification with ID: ${notification.id}`);
+      }
+
+      // Emit unread count update via Socket.IO
+      try {
+        const unreadCount = await this.getUnreadCount(userId);
+        socketService.emitToUser(userId, 'notification:unread-count', {
+          unreadCount
+        });
+        console.log(`🔔 [SOCKET] Emitted unread count (${unreadCount}) to user ${userId}`);
+      } catch (error) {
+        console.error('❌ Failed to emit notification count:', error);
       }
     } catch (error) {
       console.error('❌ Failed to create in-app notification:', error);
@@ -179,6 +191,17 @@ export class InAppNotificationService {
         isRead: true,
       },
     });
+
+    // Emit updated unread count
+    try {
+      const unreadCount = await this.getUnreadCount(userId);
+      socketService.emitToUser(userId, 'notification:unread-count', {
+        unreadCount
+      });
+      console.log(`🔔 [SOCKET] Emitted unread count (${unreadCount}) to user ${userId} after marking as read`);
+    } catch (error) {
+      console.error('❌ Failed to emit notification count:', error);
+    }
   }
 
   /**
@@ -194,6 +217,16 @@ export class InAppNotificationService {
         isRead: true,
       },
     });
+
+    // Emit updated unread count (should be 0)
+    try {
+      socketService.emitToUser(userId, 'notification:unread-count', {
+        unreadCount: 0
+      });
+      console.log(`🔔 [SOCKET] Emitted unread count (0) to user ${userId} after marking all as read`);
+    } catch (error) {
+      console.error('❌ Failed to emit notification count:', error);
+    }
   }
 
   /**

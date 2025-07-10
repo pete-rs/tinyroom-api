@@ -55,11 +55,28 @@ export const followUser = async (req: AuthRequest, res: Response) => {
       },
     });
 
-    // Get updated counts
-    const updatedUser = await prisma.user.findUnique({
-      where: { id: userId },
-      select: { followersCount: true },
-    });
+    // Count actual followers/following after creation
+    const [targetFollowersCount, currentUserFollowingCount] = await Promise.all([
+      prisma.follow.count({
+        where: { followingId: userId },
+      }),
+      prisma.follow.count({
+        where: { followerId: req.user.id },
+      }),
+    ]);
+
+    // Update both users with actual counts
+    const [followerUpdate] = await Promise.all([
+      prisma.user.update({
+        where: { id: userId },
+        data: { followersCount: targetFollowersCount },
+        select: { followersCount: true },
+      }),
+      prisma.user.update({
+        where: { id: req.user.id },
+        data: { followingCount: currentUserFollowingCount },
+      }),
+    ]);
 
     // Send notifications
     setImmediate(() => {
@@ -83,7 +100,7 @@ export const followUser = async (req: AuthRequest, res: Response) => {
     res.json({
       data: {
         following: true,
-        followersCount: updatedUser?.followersCount || 0,
+        followersCount: followerUpdate.followersCount,
       },
     });
   } catch (error) {
@@ -122,16 +139,33 @@ export const unfollowUser = async (req: AuthRequest, res: Response) => {
       where: { id: existingFollow.id },
     });
 
-    // Get updated counts
-    const updatedUser = await prisma.user.findUnique({
-      where: { id: userId },
-      select: { followersCount: true },
-    });
+    // Count actual followers/following after deletion
+    const [targetFollowersCount, currentUserFollowingCount] = await Promise.all([
+      prisma.follow.count({
+        where: { followingId: userId },
+      }),
+      prisma.follow.count({
+        where: { followerId: req.user.id },
+      }),
+    ]);
+
+    // Update both users with actual counts
+    const [followerUpdate] = await Promise.all([
+      prisma.user.update({
+        where: { id: userId },
+        data: { followersCount: targetFollowersCount },
+        select: { followersCount: true },
+      }),
+      prisma.user.update({
+        where: { id: req.user.id },
+        data: { followingCount: currentUserFollowingCount },
+      }),
+    ]);
 
     res.json({
       data: {
         following: false,
-        followersCount: updatedUser?.followersCount || 0,
+        followersCount: followerUpdate.followersCount,
       },
     });
   } catch (error) {

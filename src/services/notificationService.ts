@@ -1,5 +1,6 @@
 import * as OneSignal from '@onesignal/node-onesignal';
 import { config } from '../config';
+import { prisma } from '../config/prisma';
 
 // Initialize OneSignal configuration
 const configuration = OneSignal.createConfiguration({
@@ -20,7 +21,42 @@ export class NotificationService {
    * Send a push notification to a specific user
    */
   static async sendToUser({ userId, title, message, data }: NotificationData): Promise<void> {
+    console.log('\n🔔 ========== ONESIGNAL PUSH NOTIFICATION ==========');
+    console.log('📤 Attempting to send push notification:');
+    console.log(`   User ID: ${userId}`);
+    console.log(`   Title: "${title}"`);
+    console.log(`   Message: "${message}"`);
+    console.log(`   Data: ${JSON.stringify(data, null, 2)}`);
+    console.log(`   Timestamp: ${new Date().toISOString()}`);
+    
     try {
+      // First check if user has a OneSignal player ID
+      const user = await prisma.user.findUnique({
+        where: { id: userId },
+        select: { 
+          id: true, 
+          username: true,
+          oneSignalPlayerId: true 
+        },
+      });
+
+      if (!user) {
+        console.log(`❌ PUSH FAILED: User ${userId} not found in database`);
+        console.log('================================================\n');
+        return;
+      }
+
+      console.log(`✅ User found: ${user.username}`);
+      console.log(`   OneSignal Player ID: ${user.oneSignalPlayerId || 'NOT SET'}`);
+      
+      if (!user.oneSignalPlayerId) {
+        console.log(`⚠️  PUSH SKIPPED: User has no OneSignal player ID registered`);
+        console.log(`   The iOS app needs to call OneSignal.login("${userId}")`);
+        console.log(`   Then update the backend with PUT /api/notifications/player-id`);
+        console.log('================================================\n');
+        return;
+      }
+
       const notification = new OneSignal.Notification();
       notification.app_id = config.oneSignal.appId;
       
@@ -43,15 +79,37 @@ export class NotificationService {
       notification.ios_badge_type = 'Increase';
       notification.ios_badge_count = 1;
       
+      console.log('📱 Sending to OneSignal:');
+      console.log(`   App ID: ${config.oneSignal.appId}`);
+      console.log(`   External ID (User ID): ${userId}`);
+      console.log(`   Target Channel: push`);
+      console.log(`   iOS Badge: Increase by 1`);
+      
       const response = await client.createNotification(notification);
-      console.log('📱 Notification sent:', { 
-        userId, 
-        title, 
-        notificationId: response.id,
-        external_id: notification.include_aliases?.external_id
-      });
-    } catch (error) {
-      console.error('❌ Failed to send notification:', error);
+      
+      console.log('✅ PUSH SENT SUCCESSFULLY!');
+      console.log(`   OneSignal Notification ID: ${response.id}`);
+      console.log(`   Recipients: ${(response as any).recipients || 'Unknown'}`);
+      if (response.errors) {
+        console.log(`   ⚠️  Errors: ${JSON.stringify(response.errors)}`);
+      }
+      if ((response as any).invalid_aliases) {
+        console.log(`   ⚠️  Invalid Aliases: ${JSON.stringify((response as any).invalid_aliases)}`);
+      }
+      console.log('================================================\n');
+    } catch (error: any) {
+      console.error('❌ PUSH FAILED WITH ERROR:');
+      console.error(`   Error Type: ${error.name || 'Unknown'}`);
+      console.error(`   Error Message: ${error.message || 'No message'}`);
+      if (error.response) {
+        console.error(`   Response Status: ${error.response?.status}`);
+        console.error(`   Response Data: ${JSON.stringify(error.response?.data)}`);
+      }
+      if (error.body) {
+        console.error(`   Error Body: ${JSON.stringify(error.body)}`);
+      }
+      console.error(`   Stack: ${error.stack}`);
+      console.error('================================================\n');
       // Don't throw - we don't want notification failures to break the app
     }
   }

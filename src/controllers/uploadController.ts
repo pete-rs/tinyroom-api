@@ -185,24 +185,52 @@ export const uploadAudio = async (req: AuthRequest, res: Response) => {
     throw new AppError(401, 'UNAUTHORIZED', 'User not authenticated');
   }
 
+  const startTime = Date.now();
+
   try {
     // Get audio duration from the request if provided
     const duration = req.body.duration ? parseFloat(req.body.duration) : undefined;
 
+    console.log('🎵 [AUDIO UPLOAD] Starting upload:', {
+      fileSize: req.file.size,
+      fileSizeMB: (req.file.size / (1024 * 1024)).toFixed(2) + 'MB',
+      mimetype: req.file.mimetype,
+      userId: req.user.id,
+      duration: duration,
+    });
+
     // Upload audio file to Cloudinary
     const uploadPromise = new Promise<string>((resolve, reject) => {
+      const publicId = `audio_${req.user!.id}_${Date.now()}`;
       const uploadStream = cloudinary.uploader.upload_stream(
         {
           folder: 'room-audio',
           resource_type: 'video', // Cloudinary uses 'video' type for audio files
-          public_id: `audio_${req.user!.id}_${Date.now()}`,
+          public_id: publicId,
         },
         (error, result) => {
+          const uploadDuration = Date.now() - startTime;
+          
           if (error) {
+            console.error('🎵 [AUDIO UPLOAD] Cloudinary error:', {
+              error: error.message,
+              httpCode: error.http_code,
+              uploadDuration: uploadDuration + 'ms',
+            });
             reject(error);
           } else if (result) {
+            console.log('🎵 [AUDIO UPLOAD] Cloudinary success:', {
+              uploadDuration: uploadDuration + 'ms',
+              publicId: result.public_id,
+              format: result.format,
+              bytes: result.bytes,
+              bytesMB: (result.bytes / (1024 * 1024)).toFixed(2) + 'MB',
+              cloudinaryAudioDuration: result.duration,
+              url: result.secure_url,
+            });
             resolve(result.secure_url);
           } else {
+            console.error('🎵 [AUDIO UPLOAD] Upload failed with no result');
             reject(new Error('Upload failed'));
           }
         }
@@ -213,14 +241,26 @@ export const uploadAudio = async (req: AuthRequest, res: Response) => {
 
     const audioUrl = await uploadPromise;
 
-    res.json({
+    const response = {
       data: {
         audioUrl,
         duration,
       },
+    };
+
+    console.log('🎵 [AUDIO UPLOAD] Response sent:', JSON.stringify(response, null, 2));
+
+    res.json(response);
+  } catch (error: any) {
+    const totalDuration = Date.now() - startTime;
+    console.error('🎵 [AUDIO UPLOAD] Failed:', {
+      error: error.message,
+      httpCode: error.http_code,
+      totalDuration: totalDuration + 'ms',
+      fileSize: req.file.size,
+      fileSizeMB: (req.file.size / (1024 * 1024)).toFixed(2) + 'MB',
+      stack: error.stack,
     });
-  } catch (error) {
-    console.error('Audio upload error:', error);
     throw new AppError(500, 'UPLOAD_FAILED', 'Failed to upload audio');
   }
 };

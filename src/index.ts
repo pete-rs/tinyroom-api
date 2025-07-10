@@ -41,23 +41,30 @@ io.use(authenticateSocket);
 
 // Socket.io connection handler
 io.on('connection', (socket) => {
+  const userId = (socket as any).userId;
   console.log(`🔌 Socket connected: ${socket.id}`);
-  console.log(`✅ Socket ${socket.id} authenticated as user ${(socket as any).userId}`);
+  console.log(`✅ Socket ${socket.id} authenticated as user ${userId}`);
+  
+  // Track user socket connection
+  socketService.addUserSocket(userId, socket.id);
   
   // Set up room handlers
   setupRoomHandlers(io, socket as any);
   
   // Handle disconnect
   socket.on('disconnect', async () => {
-    console.log(`🔌 Socket disconnected: ${socket.id} (user: ${(socket as any).userId})`);
+    console.log(`🔌 Socket disconnected: ${socket.id} (user: ${userId})`);
+    
+    // Remove user socket tracking
+    socketService.removeUserSocket(socket.id);
     
     // Leave all rooms and notify others
     const rooms = Array.from(socket.rooms);
     rooms.forEach(roomId => {
       if (roomId !== socket.id) {  // Skip default room
-        console.log(`🚪 [Room ${roomId}] User ${(socket as any).userId} disconnected`);
+        console.log(`🚪 [Room ${roomId}] User ${userId} disconnected`);
         socket.to(roomId).emit('user:left', {
-          userId: (socket as any).userId,
+          userId: userId,
         });
       }
     });
