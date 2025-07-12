@@ -19,6 +19,8 @@ import {
   addParticipants,
   removeParticipants,
   testRoomPublicStatus,
+  setRoomSticker,
+  removeRoomSticker,
 } from '../controllers/roomController';
 import { authMiddleware, requireCompleteProfile } from '../middleware/auth';
 import { asyncHandler } from '../utils/asyncHandler';
@@ -56,5 +58,9 @@ router.put('/:roomId/elements/:elementId/link-style', asyncHandler(updateElement
 // Participant management (creator only)
 router.post('/:id/participants', asyncHandler(addParticipants)); // Add participants to room
 router.delete('/:id/participants/:userId', asyncHandler(removeParticipants)); // Remove single participant from room
+
+// Sticker management (creator only)
+router.put('/:roomId/sticker', asyncHandler(setRoomSticker)); // Set room sticker
+router.delete('/:roomId/sticker', asyncHandler(removeRoomSticker)); // Remove room sticker
 
 export default router;

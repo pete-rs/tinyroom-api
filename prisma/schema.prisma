@@ -63,6 +63,11 @@ model Room {
   backgroundColor String? @map("background_color") // Hex color for room background (e.g., "#FFFFFF")
   backgroundImageUrl String? @map("background_image_url") // Cloudinary URL for background image
   backgroundImageThumbUrl String? @map("background_image_thumb_url") // 400px thumbnail for quick loading
+  viewCount        Int      @default(0) @map("view_count") // Track total view count for the room
+  
+  // Sticker feature - reference to a photo or video element in the room
+  stickerElementId String? @map("sticker_element_id")
+  stickerElement   Element? @relation("RoomSticker", fields: [stickerElementId], references: [id], onDelete: SetNull)
   
   participants RoomParticipant[]
   elements     Element[]
@@ -126,6 +131,7 @@ model Element {
   deletedAt  DateTime? @map("deleted_at")
   
   referencedInComments Comment[]
+  roomsAsSticker       Room[] @relation("RoomSticker")
   
   @@index([roomId, createdAt(sort: Desc)]) // For efficient recent elements query
   @@index([roomId, zIndex]) // For efficient z-order queries

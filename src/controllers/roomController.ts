@@ -6,7 +6,7 @@ import { getPagination, getPaginationMeta } from '../utils/pagination';
 import { getAvailableColor } from '../utils/colors';
 import { NotificationService } from '../services/notificationService';
 import { InAppNotificationService } from '../services/inAppNotificationService';
-import { userSelect } from '../utils/prismaSelects';
+import { userSelect, minimalUserSelect } from '../utils/prismaSelects';
 import { NotificationType } from '@prisma/client';
 import { socketService } from '../services/socketService';
 import { generateRoomColors } from '../utils/roomColors';
@@ -438,6 +438,7 @@ export const getRoom = async (req: AuthRequest, res: Response) => {
           lastReactionAt: true,
           commentCount: true,
           commentsUpdatedAt: true,
+          viewCount: true,
         },
       }),
       // Check if current user has reacted
@@ -477,6 +478,7 @@ export const getRoom = async (req: AuthRequest, res: Response) => {
         lastReactionAt: reactionData?.lastReactionAt,
         commentCount: reactionData?.commentCount || 0,
         commentsUpdatedAt: reactionData?.commentsUpdatedAt,
+        viewCount: reactionData?.viewCount || 0,
         userReaction: userReaction ? {
           hasReacted: true,
           emoji: userReaction.emoji,
@@ -552,6 +554,16 @@ export const joinRoom = async (req: AuthRequest, res: Response) => {
         },
       });
     }
+
+    // Increment view count for the room
+    await prisma.room.update({
+      where: { id },
+      data: {
+        viewCount: {
+          increment: 1,
+        },
+      },
+    });
 
     // Room updatedAt will be automatically updated by Prisma
 
@@ -1416,12 +1428,14 @@ export const getMyRooms = async (req: AuthRequest, res: Response) => {
       last_reaction_at: Date | null;
       comments_updated_at: Date | null;
       comment_count: number;
+      view_count: number;
       has_user_reacted: boolean;
       user_reaction_emoji: string | null;
       participant_data: any; // JSON array of participants
       creator_data: any; // JSON object of creator
       name_set_by_user_data: any; // JSON object of name setter
       recent_elements: any; // JSON array of recent elements
+      sticker_element_data: any; // JSON object of sticker element
     }>>`
       SELECT 
         r.id,
@@ -1439,6 +1453,7 @@ export const getMyRooms = async (req: AuthRequest, res: Response) => {
         r.last_reaction_at,
         r.comment_count,
         r.comments_updated_at,
+        r.view_count,
         (r.created_by = ${req.user.id}) as is_creator,
         COUNT(DISTINCT e.id) FILTER (WHERE e.deleted_at IS NULL) as element_count,
         COUNT(DISTINCT e.id) FILTER (WHERE e.deleted_at IS NULL AND e.created_at > rp.last_visited_at AND e.created_by != ${req.user.id}) as unread_elements,
@@ -1507,11 +1522,50 @@ export const getMyRooms = async (req: AuthRequest, res: Response) => {
             ORDER BY e2.created_at DESC
             LIMIT 5
           ) sub
-        ) as recent_elements
+        ) as recent_elements,
+        (
+          SELECT json_build_object(
+            'id', se.id,
+            'type', se.type,
+            'positionX', se.position_x,
+            'positionY', se.position_y,
+            'width', se.width,
+            'height', se.height,
+            'rotation', se.rotation,
+            'scaleX', se.scale_x,
+            'scaleY', se.scale_y,
+            'zIndex', se.z_index,
+            'content', se.content,
+            'imageUrl', se.image_url,
+            'audioUrl', se.audio_url,
+            'videoUrl', se.video_url,
+            'thumbnailUrl', se.thumbnail_url,
+            'smallThumbnailUrl', se.small_thumbnail_url,
+            'duration', se.duration,
+            'stickerText', se.sticker_text,
+            'imageAlphaMaskUrl', se.image_alpha_mask_url,
+            'imageThumbnailAlphaMaskUrl', se.image_thumbnail_alpha_mask_url,
+            'selectedStyle', se.selected_style,
+            'linkStyle', se.link_style,
+            'createdAt', se.created_at,
+            'updatedAt', se.updated_at,
+            'createdBy', se.created_by,
+            'creator', json_build_object(
+              'id', seu.id,
+              'username', seu.username,
+              'firstName', seu.first_name,
+              'avatarUrl', seu.avatar_url
+            )
+          )
+          FROM elements se
+          LEFT JOIN users seu ON seu.id = se.created_by
+          WHERE se.id = r.sticker_element_id
+            AND se.deleted_at IS NULL
+        ) as sticker_element_data
       FROM rooms r
       JOIN room_participants rp ON rp.room_id = r.id AND rp.user_id = ${req.user.id}
       LEFT JOIN elements e ON e.room_id = r.id
-      GROUP BY r.id, r.name, r.created_at, r.updated_at, r.object_added_at, r.created_by, r.name_set_by, r.is_public, r.background_color, r.background_image_url, r.background_image_thumb_url, r.reaction_count, r.last_reaction_at, r.comments_updated_at, r.comment_count, rp.last_visited_at
+      GROUP BY r.id, r.name, r.created_at, r.updated_at, r.object_added_at, r.created_by, r.name_set_by, r.is_public, r.background_color, r.background_image_url, r.background_image_thumb_url, r.reaction_count, r.last_reaction_at, r.comments_updated_at, r.comment_count, r.sticker_element_id, rp.last_visited_at
       ORDER BY GREATEST(r.object_added_at, COALESCE(r.comments_updated_at, r.object_added_at)) DESC
     `;
 
@@ -1600,10 +1654,12 @@ export const getMyRooms = async (req: AuthRequest, res: Response) => {
         lastReactionAt: room.last_reaction_at,
         commentCount: room.comment_count,
         commentsUpdatedAt: room.comments_updated_at,
+        viewCount: room.view_count,
         userReaction: room.has_user_reacted ? {
           hasReacted: true,
           emoji: room.user_reaction_emoji || '❤️',
         } : null,
+        stickerElement: room.sticker_element_data,
       };
       
       // Debug log for comment data
@@ -2029,4 +2085,222 @@ export const removeParticipants = async (req: AuthRequest, res: Response) => {
     if (error instanceof AppError) throw error;
     throw new AppError(500, 'INTERNAL_ERROR', 'Failed to remove participants');
   }
+};
+
+export const setRoomSticker = async (req: AuthRequest, res: Response) => {
+  const { roomId } = req.params;
+  const { elementId } = req.body;
+
+  console.log('🎨 [SET ROOM STICKER] Request received:', {
+    roomId,
+    elementId,
+    userId: req.user?.id,
+    username: req.user?.username,
+  });
+
+  if (!req.user) {
+    console.error('🎨 [SET ROOM STICKER] No authenticated user');
+    throw new AppError(401, 'UNAUTHORIZED', 'User not authenticated');
+  }
+
+  if (!elementId) {
+    console.error('🎨 [SET ROOM STICKER] Missing elementId in request body');
+    throw new AppError(400, 'INVALID_REQUEST', 'elementId is required');
+  }
+
+  // First check if room exists at all
+  const roomExists = await prisma.room.findUnique({
+    where: { id: roomId },
+    select: { 
+      id: true, 
+      createdBy: true,
+      name: true,
+    },
+  });
+
+  if (!roomExists) {
+    console.error('🎨 [SET ROOM STICKER] Room does not exist:', roomId);
+    throw new AppError(404, 'ROOM_NOT_FOUND', 'Room not found');
+  }
+
+  console.log('🎨 [SET ROOM STICKER] Room found:', {
+    roomId: roomExists.id,
+    roomName: roomExists.name,
+    createdBy: roomExists.createdBy,
+    requestingUser: req.user.id,
+    isCreator: roomExists.createdBy === req.user.id,
+  });
+
+  // Check if user is creator
+  if (roomExists.createdBy !== req.user.id) {
+    console.error('🎨 [SET ROOM STICKER] User is not room creator:', {
+      roomCreator: roomExists.createdBy,
+      requestingUser: req.user.id,
+    });
+    throw new AppError(403, 'FORBIDDEN', 'Only the room creator can set stickers');
+  }
+
+  // Verify element exists, belongs to this room, and is PHOTO or VIDEO
+  console.log('🎨 [SET ROOM STICKER] Checking element:', {
+    elementId,
+    roomId,
+  });
+
+  const element = await prisma.element.findFirst({
+    where: {
+      id: elementId,
+      roomId: roomId,
+      type: {
+        in: ['PHOTO', 'VIDEO'],
+      },
+      deletedAt: null,
+    },
+    select: {
+      id: true,
+      type: true,
+      roomId: true,
+      createdBy: true,
+    },
+  });
+
+  if (!element) {
+    // Check why element wasn't found
+    const elementCheck = await prisma.element.findUnique({
+      where: { id: elementId },
+      select: {
+        id: true,
+        type: true,
+        roomId: true,
+        deletedAt: true,
+      },
+    });
+
+    if (!elementCheck) {
+      console.error('🎨 [SET ROOM STICKER] Element does not exist:', elementId);
+      throw new AppError(404, 'ELEMENT_NOT_FOUND', 'Element not found');
+    } else if (elementCheck.roomId !== roomId) {
+      console.error('🎨 [SET ROOM STICKER] Element belongs to different room:', {
+        elementRoom: elementCheck.roomId,
+        requestedRoom: roomId,
+      });
+      throw new AppError(404, 'ELEMENT_NOT_FOUND', 'Element does not belong to this room');
+    } else if (!['PHOTO', 'VIDEO'].includes(elementCheck.type)) {
+      console.error('🎨 [SET ROOM STICKER] Element is not photo/video:', elementCheck.type);
+      throw new AppError(400, 'INVALID_ELEMENT_TYPE', `Element is ${elementCheck.type}, but must be PHOTO or VIDEO`);
+    } else if (elementCheck.deletedAt) {
+      console.error('🎨 [SET ROOM STICKER] Element is deleted:', elementCheck.deletedAt);
+      throw new AppError(404, 'ELEMENT_DELETED', 'Element has been deleted');
+    }
+    
+    throw new AppError(404, 'ELEMENT_NOT_FOUND', 'Element validation failed');
+  }
+
+  console.log('🎨 [SET ROOM STICKER] Element validated:', {
+    elementId: element.id,
+    type: element.type,
+    createdBy: element.createdBy,
+  });
+
+  // Update room with sticker element
+  const updatedRoom = await prisma.room.update({
+    where: { id: roomId },
+    data: { 
+      stickerElementId: elementId,
+      updatedAt: new Date(),
+    },
+    include: {
+      stickerElement: {
+        include: {
+          creator: {
+            select: minimalUserSelect,
+          },
+        },
+      },
+    },
+  });
+
+  console.log('🎨 [SET ROOM STICKER] Success:', {
+    roomId: updatedRoom.id,
+    roomName: roomExists.name,
+    stickerId: elementId,
+    stickerType: element.type,
+  });
+
+  res.json({
+    data: {
+      roomId: updatedRoom.id,
+      stickerElement: updatedRoom.stickerElement,
+    },
+  });
+};
+
+export const removeRoomSticker = async (req: AuthRequest, res: Response) => {
+  const { roomId } = req.params;
+
+  console.log('🎨 [REMOVE ROOM STICKER] Request received:', {
+    roomId,
+    userId: req.user?.id,
+    username: req.user?.username,
+  });
+
+  if (!req.user) {
+    console.error('🎨 [REMOVE ROOM STICKER] No authenticated user');
+    throw new AppError(401, 'UNAUTHORIZED', 'User not authenticated');
+  }
+
+  // First check if room exists at all
+  const roomExists = await prisma.room.findUnique({
+    where: { id: roomId },
+    select: { 
+      id: true, 
+      createdBy: true,
+      name: true,
+      stickerElementId: true,
+    },
+  });
+
+  if (!roomExists) {
+    console.error('🎨 [REMOVE ROOM STICKER] Room does not exist:', roomId);
+    throw new AppError(404, 'ROOM_NOT_FOUND', 'Room not found');
+  }
+
+  console.log('🎨 [REMOVE ROOM STICKER] Room found:', {
+    roomId: roomExists.id,
+    roomName: roomExists.name,
+    createdBy: roomExists.createdBy,
+    requestingUser: req.user.id,
+    isCreator: roomExists.createdBy === req.user.id,
+    currentSticker: roomExists.stickerElementId,
+  });
+
+  // Check if user is creator
+  if (roomExists.createdBy !== req.user.id) {
+    console.error('🎨 [REMOVE ROOM STICKER] User is not room creator:', {
+      roomCreator: roomExists.createdBy,
+      requestingUser: req.user.id,
+    });
+    throw new AppError(403, 'FORBIDDEN', 'Only the room creator can remove stickers');
+  }
+
+  // Remove sticker
+  await prisma.room.update({
+    where: { id: roomId },
+    data: { 
+      stickerElementId: null,
+      updatedAt: new Date(),
+    },
+  });
+
+  console.log('🎨 [REMOVE ROOM STICKER] Success:', {
+    roomId: roomExists.id,
+    roomName: roomExists.name,
+    previousSticker: roomExists.stickerElementId,
+  });
+
+  res.json({
+    data: {
+      roomId: roomId,
+      stickerElement: null,
+    },
+  });
 };
