@@ -47,7 +47,12 @@ src/
 │   ├── horoscopeController.ts
 │   ├── followController.ts
 │   ├── commentsController.ts
-│   └── reactionsController.ts
+│   ├── reactionsController.ts
+│   ├── debugController.ts         # Database statistics
+│   ├── profileController.ts       # User profiles
+│   ├── roomCommentController.ts   # Room-level comments
+│   ├── roomReactionController.ts  # Room-level reactions
+│   └── userSearchController.ts    # User search
 ├── middleware/      # Express middleware
 │   ├── auth.ts             # JWT/opaque token auth
 │   ├── errorHandler.ts     # Global error handling
@@ -57,7 +62,8 @@ src/
 │   ├── claudeService.ts    # AI integration
 │   ├── horoscopeService.ts
 │   ├── notificationService.ts
-│   └── socketService.ts
+│   ├── socketService.ts
+│   └── inAppNotificationService.ts  # Notification batching
 ├── sockets/         # Socket.io handlers
 │   ├── socketAuth.ts
 │   ├── roomHandlers.ts
@@ -67,7 +73,10 @@ src/
 │   ├── asyncHandler.ts     # Async route wrapper
 │   ├── colors.ts          # 15+ distinct colors
 │   ├── pagination.ts      # Pagination helpers
-│   └── prismaSelects.ts   # Reusable queries
+│   ├── prismaSelects.ts   # Reusable queries
+│   ├── elementHelpers.ts  # Element manipulation
+│   ├── roomColors.ts      # Room color management
+│   └── thumbnailHelpers.ts # Thumbnail generation
 ├── app.ts          # Express app setup
 └── index.ts        # Server entry point
 
@@ -117,6 +126,8 @@ Main entities:
   - `createdBy`: Room creator (special permissions)
   - `backgroundColor`, `backgroundImageUrl`, `backgroundImageThumbUrl`: Customization
   - `updatedAt`: Auto-updates on any change
+  - `viewCount`: Total room views tracking
+  - `stickerId`: Reference to element used as room sticker
   - Denormalized: `_count.likes`
 - **RoomParticipant**: Links users to rooms
   - `lastVisitedAt`: For unread tracking
@@ -125,6 +136,8 @@ Main entities:
 - **Element**: Canvas items (soft-deleted)
   - Types: NOTE, PHOTO, AUDIO, VIDEO, LINK, HOROSCOPE
   - Transform fields: rotation, scaleX, scaleY, originX, originY
+  - `photoStyle`: Style variant for photos (`rounded` or `square`)
+  - `linkStyle`: Style variant for links (`normal` or `minimal`)
   - Denormalized: `_count.comments`
 - **Message**: Room text messages (1000 char limit)
   - Soft delete support
@@ -178,6 +191,8 @@ Profile REQUIRED:
 - `GET /api/users/:id` - Get user profile
 - `GET /api/users/:id/followers` - User's followers (paginated)
 - `GET /api/users/:id/following` - Who user follows (paginated)
+- `GET /api/users/me/profile` - Get current user's profile data
+- `GET /api/users/:username/profile` - Get user profile by username
 
 ### Following System
 - `POST /api/following/follow` - Follow user (body: `{ userId }`)
@@ -186,18 +201,25 @@ Profile REQUIRED:
 
 ### Room Endpoints
 - `GET /api/rooms/my-rooms` - **PRIMARY** All rooms with unread indicators
+- `GET /api/rooms/grouped-by-person` - Rooms grouped by participants
 - `POST /api/rooms` - Create room
   - Body: `{ name: "Required", participantIds: ["userId1", "userId2"] }`
 - `GET /api/rooms/:id` - Room details with elements
 - `PUT /api/rooms/:id/name` - Update room name
 - `PUT /api/rooms/:id/background` - Update background
+- `PUT /api/rooms/:id/visibility` - Toggle room public/private
 - `POST /api/rooms/:id/join` - Join room (updates lastVisitedAt)
 - `POST /api/rooms/:id/leave` - Leave room
 - `DELETE /api/rooms/:id` - Delete room (creator only)
 - `POST /api/rooms/:id/permanently-leave` - Permanent leave (non-creators)
 - `GET /api/rooms/:id/elements` - Get elements
+- `DELETE /api/rooms/:roomId/elements/:elementId` - Delete specific element
+- `PUT /api/rooms/:roomId/elements/:elementId/photo-style` - Update photo style
+- `PUT /api/rooms/:roomId/elements/:elementId/link-style` - Update link style
 - `POST /api/rooms/:id/participants` - Add participant (any member)
 - `DELETE /api/rooms/:id/participants/:userId` - Remove participant
+- `PUT /api/rooms/:roomId/sticker` - Set room sticker
+- `DELETE /api/rooms/:roomId/sticker` - Remove room sticker
 
 ### Element Comments & Reactions
 - `GET /api/rooms/:roomId/elements/:elementId/comments` - Get comments
@@ -236,6 +258,11 @@ Profile REQUIRED:
 
 ### Horoscope
 - `POST /api/horoscope/generate` - Generate horoscope for room participants
+
+### Debug Endpoints (Development Only)
+- `GET /db-stats` - Get database statistics
+- `GET /api/rooms/:id/test-public` - Test room public status
+- `GET /debug/reactions/:roomId` - Debug room reactions
 
 ## Real-time Features (Socket.io)
 
@@ -318,8 +345,9 @@ iOS implementation:
 2. **Efficient Queries**: Prisma selects minimize data transfer
 3. **Transform Preview**: Two-phase system for smooth dragging
 4. **Message Pagination**: 30 messages per page
-5. **Notification Batching**: Groups element additions
+5. **Notification Batching**: Groups element additions within 5-minute window
 6. **Optimized Socket Handlers**: Separate file for performance-critical paths
+7. **Database Indexes**: Optimized for user search and room queries
 
 ## Security Features
 
@@ -403,3 +431,6 @@ Required in `.env`:
 8. **Stateless Touch Events**: Performance optimization
 9. **Denormalized Counts**: Reduce query complexity
 10. **Transform Preview**: Smooth UI without database writes
+11. **View Tracking**: Simple increment counter for room analytics
+12. **Room Stickers**: Visual representation using existing elements
+13. **Style Variants**: Flexible element styling without breaking changes
