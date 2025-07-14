@@ -8,6 +8,7 @@ export const verifyAuth = async (req: AuthRequest, res: Response) => {
   console.log('Auth data:', JSON.stringify(req.auth, null, 2));
   console.log('Auth token sub:', req.auth?.sub);
   console.log('Auth token email:', req.auth?.email);
+  console.log('Auth token phone_number:', req.auth?.phone_number);
   console.log('Existing user:', req.user ? 'Yes' : 'No');
   
   try {
@@ -20,11 +21,19 @@ export const verifyAuth = async (req: AuthRequest, res: Response) => {
     });
 
     if (!user) {
-      // Extract email from Auth0 token
-      const email = req.auth.email;
+      // Extract email from Auth0 token, or generate one for SMS auth
+      let email = req.auth.email;
+      
+      // For SMS authentication, create a placeholder email
+      if (!email && req.auth.sub.startsWith('sms|')) {
+        // Extract phone number if available, otherwise use the auth0 sub
+        const phoneNumber = req.auth.phone_number || req.auth.sub;
+        email = `${phoneNumber.replace(/[^a-zA-Z0-9]/g, '')}@sms.placeholder`;
+        console.log('SMS auth detected, using placeholder email:', email);
+      }
       
       if (!email) {
-        console.log('No email found in token:', req.auth);
+        console.log('No email found in token and not SMS auth:', req.auth);
         return res.status(200).json({
           data: {
             user: null,
@@ -61,7 +70,7 @@ export const verifyAuth = async (req: AuthRequest, res: Response) => {
       },
     });
   } catch (error: any) {
-    console.error('Error in completeProfile:', {
+    console.error('Error in verifyAuth:', {
       error: error.message,
       code: error.code,
       auth0Id: req.auth?.sub,
@@ -129,9 +138,19 @@ export const completeProfile = async (req: AuthRequest, res: Response) => {
     });
 
     if (!user) {
-      console.log('User not found, creating new user for magic link flow');
+      console.log('User not found, creating new user for magic link/SMS flow');
       // Extract email from token or use a placeholder
-      const email = req.auth.email || `${req.auth.sub}@placeholder.com`;
+      let email = req.auth.email;
+      
+      // For SMS authentication, create a placeholder email
+      if (!email && req.auth.sub.startsWith('sms|')) {
+        const phoneNumber = req.auth.phone_number || req.auth.sub;
+        email = `${phoneNumber.replace(/[^a-zA-Z0-9]/g, '')}@sms.placeholder`;
+        console.log('SMS auth detected in profile completion, using placeholder email:', email);
+      } else if (!email) {
+        email = `${req.auth.sub}@placeholder.com`;
+      }
+      
       console.log('Using email for new user:', email);
       console.log('Creating user with data:', {
         auth0Id: req.auth.sub,
