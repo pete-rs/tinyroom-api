@@ -406,37 +406,11 @@ export const getUsersWithoutRooms = async (req: AuthRequest, res: Response) => {
       throw new AppError(401, 'UNAUTHORIZED', 'User not authenticated');
     }
 
-    // First, get all users who have rooms with the current user
-    const usersWithRooms = await prisma.user.findMany({
-      where: {
-        id: {
-          not: req.user.id, // Exclude current user
-        },
-        roomParticipants: {
-          some: {
-            room: {
-              participants: {
-                some: {
-                  userId: req.user.id,
-                },
-              },
-            },
-          },
-        },
-      },
-      select: {
-        id: true,
-      },
-    });
-
-    const userIdsWithRooms = usersWithRooms.map(u => u.id);
-
-    // Now get all users who don't have rooms with the current user
+    // Single optimized query using NOT EXISTS
     const usersWithoutRooms = await prisma.user.findMany({
       where: {
         id: {
           not: req.user.id, // Exclude current user
-          notIn: userIdsWithRooms, // Exclude users who already have rooms
         },
         // Only show users with complete profiles
         firstName: {
@@ -445,6 +419,18 @@ export const getUsersWithoutRooms = async (req: AuthRequest, res: Response) => {
         NOT: {
           username: {
             startsWith: 'user_',
+          },
+        },
+        // Exclude users who already have rooms with the current user
+        roomParticipants: {
+          none: {
+            room: {
+              participants: {
+                some: {
+                  userId: req.user.id,
+                },
+              },
+            },
           },
         },
       },

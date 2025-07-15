@@ -4,6 +4,7 @@ import jwksRsa from 'jwks-rsa';
 import { config } from '../config';
 import { prisma } from '../config/prisma';
 import fetch from 'node-fetch';
+import { logger } from '../utils/logger';
 
 const jwksClient = jwksRsa({
   jwksUri: `https://${config.auth0.domain}/.well-known/jwks.json`,
@@ -115,8 +116,11 @@ export const authenticateSocket = async (socket: Socket, next: (err?: Error) => 
 
     if (!token) {
       console.log('❌ [Socket.io] No token found in auth or query params');
-      console.log('📦 [Socket.io] Debug - auth object:', JSON.stringify(socket.handshake.auth));
-      console.log('📦 [Socket.io] Debug - query object:', JSON.stringify(socket.handshake.query));
+      logger.debug('📦 [Socket.io] Debug - handshake data', {
+        authKeys: Object.keys(socket.handshake.auth),
+        queryKeys: Object.keys(socket.handshake.query),
+        hasToken: !!socket.handshake.auth.token
+      });
       return next(new Error('No token provided'));
     }
 

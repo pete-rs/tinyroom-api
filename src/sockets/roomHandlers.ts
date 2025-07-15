@@ -5,6 +5,8 @@ import { NotificationService } from '../services/notificationService';
 import { InAppNotificationService } from '../services/inAppNotificationService';
 import { getElementsWithReactions } from '../utils/elementHelpers';
 import { getSmallThumbnailUrl } from '../utils/thumbnailHelpers';
+import { socketThrottle } from '../utils/socketThrottle';
+import { chunkArray, getRoomSize } from '../utils/arrayHelpers';
 
 interface SocketWithUser extends Socket {
   userId: string;
@@ -125,9 +127,19 @@ export const setupRoomHandlers = (io: Server, socket: SocketWithUser) => {
 
       // Room found and user is a participant
 
+      // Check room size before joining
+      const currentRoomSize = await getRoomSize(io, roomId);
+      const MAX_ROOM_SIZE = 100; // Limit to 100 concurrent users per room
+      
+      if (currentRoomSize >= MAX_ROOM_SIZE) {
+        console.log(`❌ [Room ${roomId}] Room is full (${currentRoomSize}/${MAX_ROOM_SIZE})`);
+        socket.emit('error', { message: 'Room is full. Please try again later.' });
+        return;
+      }
+      
       // Join socket room
       socket.join(roomId);
-      console.log(`✅ [Room ${roomId}] User ${socket.userId} joined socket room`);
+      console.log(`✅ [Room ${roomId}] User ${socket.userId} joined socket room (${currentRoomSize + 1}/${MAX_ROOM_SIZE})`);
 
       // Update participant status
       await prisma.roomParticipant.update({
@@ -186,6 +198,7 @@ export const setupRoomHandlers = (io: Server, socket: SocketWithUser) => {
             audioUrl: element.audioUrl,
             videoUrl: element.videoUrl,
             thumbnailUrl: element.thumbnailUrl,
+            smallThumbnailUrl: element.smallThumbnailUrl,
             duration: element.duration,
             createdBy: element.createdBy,
             rotation: element.rotation,
@@ -310,11 +323,10 @@ export const setupRoomHandlers = (io: Server, socket: SocketWithUser) => {
     }
   });
 
-  // Touch tracking
+  // Touch tracking (throttled to max 30 events/second per user)
   socket.on('touch:move', async (data: TouchMoveData) => {
     const { roomId, x, y, elementId } = data;
-    console.log(`👆 [Room ${roomId}] Touch move from ${socket.userId} at (${x}, ${y})${elementId ? ` for element ${elementId}` : ''}`);
-
+    
     // Verify user is in room
     const rooms = Array.from(socket.rooms);
     if (!rooms.includes(roomId)) {
@@ -324,13 +336,24 @@ export const setupRoomHandlers = (io: Server, socket: SocketWithUser) => {
       return;
     }
 
-    // Broadcast to others in room (not sender)
-    socket.to(roomId).emit('touch:moved', {
-      userId: socket.userId,
-      x,
-      y,
-      elementId,  // Include elementId when present (element dragging)
-    });
+    // Throttle to 30 events per second (33ms delay)
+    const throttleKey = `${socket.userId}-touch-move`;
+    socketThrottle.throttle(
+      throttleKey,
+      data,
+      () => {
+        console.log(`👆 [Room ${roomId}] Touch move from ${socket.userId} at (${x}, ${y})${elementId ? ` for element ${elementId}` : ''}`);
+        
+        // Broadcast to others in room (not sender)
+        socket.to(roomId).emit('touch:moved', {
+          userId: socket.userId,
+          x,
+          y,
+          elementId,  // Include elementId when present (element dragging)
+        });
+      },
+      33 // 33ms = ~30 events per second
+    );
   });
 
   socket.on('touch:end', async (data: TouchEndData) => {
@@ -489,15 +512,7 @@ export const setupRoomHandlers = (io: Server, socket: SocketWithUser) => {
       // Also broadcast to all others in room
       socket.to(roomId).emit('element:created', elementResponse);
 
-      // ALSO broadcast globally for element count tracking in MyRooms
-      io.emit('element:created:global', {
-        roomId,
-        elementId: element.id,
-        createdBy: element.createdBy,
-        type: element.type.toLowerCase(),
-      });
-
-      console.log(`📤 [Room ${roomId}] Broadcasted element:created to all participants and globally`);
+      console.log(`📤 [Room ${roomId}] Broadcasted element:created to all participants`);
       
       // Send acknowledgment if callback provided
       if (callback && typeof callback === 'function') {
@@ -733,16 +748,10 @@ export const setupRoomHandlers = (io: Server, socket: SocketWithUser) => {
     }
   });
 
-  // Handle live transform preview (during gesture)
+  // Handle live transform preview (during gesture) - throttled to max 10 events/second
   socket.on('element:transforming', async (data: ElementTransformData) => {
     try {
       const { roomId, elementId, transform } = data;
-      
-      console.log(`🔄 [Room ${roomId}] User ${socket.userId} live transforming element ${elementId}:`, {
-        rotation: transform.rotation,
-        scaleX: transform.scaleX,
-        scaleY: transform.scaleY
-      });
       
       // Quick verification user is in room
       const rooms = Array.from(socket.rooms);
@@ -752,17 +761,32 @@ export const setupRoomHandlers = (io: Server, socket: SocketWithUser) => {
         return;
       }
       
-      // Get other users in room for logging
-      const roomSockets = await io.in(roomId).fetchSockets();
-      const otherUsers = roomSockets.filter(s => s.id !== socket.id).length;
-      console.log(`📤 [Room ${roomId}] Broadcasting element:transforming to ${otherUsers} other users`);
-      
-      // Broadcast preview to others (no DB write)
-      socket.to(roomId).emit('element:transforming', {
-        elementId,
-        userId: socket.userId,
-        transform,
-      });
+      // Throttle to 10 events per second (100ms delay)
+      const throttleKey = `${socket.userId}-transform-${elementId}`;
+      socketThrottle.throttle(
+        throttleKey,
+        data,
+        async () => {
+          console.log(`🔄 [Room ${roomId}] User ${socket.userId} live transforming element ${elementId}:`, {
+            rotation: transform.rotation,
+            scaleX: transform.scaleX,
+            scaleY: transform.scaleY
+          });
+          
+          // Get other users in room for logging
+          const roomSockets = await io.in(roomId).fetchSockets();
+          const otherUsers = roomSockets.filter(s => s.id !== socket.id).length;
+          console.log(`📤 [Room ${roomId}] Broadcasting element:transforming to ${otherUsers} other users`);
+          
+          // Broadcast preview to others (no DB write)
+          socket.to(roomId).emit('element:transforming', {
+            elementId,
+            userId: socket.userId,
+            transform,
+          });
+        },
+        100 // 100ms = 10 events per second
+      );
     } catch (error) {
       console.error('Error handling element transform preview:', error);
     }
@@ -1183,6 +1207,10 @@ export const setupRoomHandlers = (io: Server, socket: SocketWithUser) => {
 
   socket.on('disconnect', async () => {
     try {
+      // Clean up throttle data for this user
+      socketThrottle.cleanup(`${socket.userId}-touch-move`);
+      // Clean up any transform throttles (we don't know all element IDs, so this is a limitation)
+      
       // Get all rooms the user is active in
       const activeRooms = await prisma.roomParticipant.findMany({
         where: {

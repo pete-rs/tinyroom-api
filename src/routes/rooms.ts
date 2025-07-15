@@ -18,7 +18,6 @@ import {
   updateElementLinkStyle,
   addParticipants,
   removeParticipants,
-  testRoomPublicStatus,
   setRoomSticker,
   removeRoomSticker,
 } from '../controllers/roomController';
@@ -42,7 +41,6 @@ router.post('/', asyncHandler(createRoom));
 
 // Room-specific endpoints
 router.get('/:id', asyncHandler(getRoom));
-router.get('/:id/test-public', asyncHandler(testRoomPublicStatus)); // Debug endpoint
 router.put('/:id/name', asyncHandler(updateRoomName));
 router.put('/:id/visibility', asyncHandler(updateRoomVisibility)); // Toggle public/private
 router.put('/:id/background', asyncHandler(updateRoomBackground)); // Update background color/image

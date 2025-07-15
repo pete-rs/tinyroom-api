@@ -9,13 +9,6 @@ export interface AuthRequest extends Request {
   user?: User;
 }
 
-// Type for async route handlers
-export type AsyncHandler = (
-  req: AuthRequest,
-  res: any,
-  next: any
-) => Promise<void>;
-
 export interface ErrorResponse {
   error: {
     code: string;
@@ -23,16 +16,3 @@ export interface ErrorResponse {
   };
 }
 
-export interface SuccessResponse<T> {
-  data: T;
-  meta?: {
-    page?: number;
-    totalPages?: number;
-    totalCount?: number;
-  };
-}
-
-export interface SocketWithAuth {
-  userId?: string;
-  user?: User;
-}

@@ -2,14 +2,15 @@ import { Response } from 'express';
 import { AuthRequest } from '../types';
 import { prisma } from '../config/prisma';
 import { AppError } from '../middleware/errorHandler';
+import { logger } from '../utils/logger';
 
 export const verifyAuth = async (req: AuthRequest, res: Response) => {
-  console.log('=== VERIFY AUTH ENDPOINT CALLED ===');
-  console.log('Auth data:', JSON.stringify(req.auth, null, 2));
-  console.log('Auth token sub:', req.auth?.sub);
-  console.log('Auth token email:', req.auth?.email);
-  console.log('Auth token phone_number:', req.auth?.phone_number);
-  console.log('Existing user:', req.user ? 'Yes' : 'No');
+  logger.info('=== VERIFY AUTH ENDPOINT CALLED ===', {
+    authSub: req.auth?.sub,
+    hasEmail: !!req.auth?.email,
+    hasPhoneNumber: !!req.auth?.phone_number,
+    existingUser: !!req.user
+  });
   
   try {
     if (!req.auth?.sub) {
@@ -82,12 +83,12 @@ export const verifyAuth = async (req: AuthRequest, res: Response) => {
 
 export const completeProfile = async (req: AuthRequest, res: Response) => {
   try {
-    console.log('=== COMPLETE PROFILE ENDPOINT CALLED ===');
-    console.log('Request body:', JSON.stringify(req.body, null, 2));
-    console.log('Auth token data:', JSON.stringify(req.auth, null, 2));
-    console.log('Auth sub:', req.auth?.sub);
-    console.log('Auth email:', req.auth?.email);
-    console.log('User from middleware:', req.user ? `Found (ID: ${req.user.id})` : 'Not found');
+    logger.info('=== COMPLETE PROFILE ENDPOINT CALLED ===', {
+      authSub: req.auth?.sub,
+      hasEmail: !!req.auth?.email,
+      userFromMiddleware: req.user?.id || 'Not found',
+      requestFields: Object.keys(req.body)
+    });
     
     let { username, firstName, dateOfBirth, avatarUrl } = req.body;
 
@@ -202,27 +203,6 @@ export const completeProfile = async (req: AuthRequest, res: Response) => {
   }
 };
 
-// Debug endpoint to see what Auth0 sends
-export const debugAuth = async (req: AuthRequest, res: Response) => {
-  console.log('=== DEBUG AUTH ENDPOINT ===');
-  console.log('Full auth object:', JSON.stringify(req.auth, null, 2));
-  console.log('User from DB:', req.user ? {
-    id: req.user.id,
-    auth0Id: req.user.auth0Id,
-    email: req.user.email,
-    username: req.user.username
-  } : 'Not found');
-  
-  res.json({
-    auth: req.auth,
-    userExists: !!req.user,
-    user: req.user ? {
-      id: req.user.id,
-      username: req.user.username,
-      email: req.user.email
-    } : null
-  });
-};
 
 export const checkUsername = async (req: AuthRequest, res: Response) => {
   try {

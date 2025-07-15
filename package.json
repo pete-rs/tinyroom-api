@@ -29,8 +29,10 @@
   "dependencies": {
     "@onesignal/node-onesignal": "^5.1.0-beta1",
     "@prisma/client": "^6.9.0",
+    "@types/compression": "^1.8.1",
     "@types/sharp": "^0.32.0",
     "cloudinary": "^2.6.1",
+    "compression": "^1.8.0",
     "cors": "^2.8.5",
     "dotenv": "^16.5.0",
     "express": "^5.1.0",
