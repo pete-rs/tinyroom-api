@@ -405,7 +405,6 @@ export const getRoom = async (req: AuthRequest, res: Response) => {
           reactionCount: true,
           lastReactionAt: true,
           commentCount: true,
-          commentsUpdatedAt: true,
           viewCount: true,
         },
       }),
@@ -427,7 +426,6 @@ export const getRoom = async (req: AuthRequest, res: Response) => {
       reactionCount: reactionData?.reactionCount || 0,
       lastReactionAt: reactionData?.lastReactionAt,
       commentCount: reactionData?.commentCount || 0,
-      commentsUpdatedAt: reactionData?.commentsUpdatedAt,
       currentUserHasReacted: !!userReaction,
       currentUserReactionEmoji: userReaction?.emoji || null,
       currentUserId: req.user.id,
@@ -445,8 +443,7 @@ export const getRoom = async (req: AuthRequest, res: Response) => {
         reactionCount: reactionData?.reactionCount || 0,
         lastReactionAt: reactionData?.lastReactionAt,
         commentCount: reactionData?.commentCount || 0,
-        commentsUpdatedAt: reactionData?.commentsUpdatedAt,
-        viewCount: reactionData?.viewCount || 0,
+          viewCount: reactionData?.viewCount || 0,
         userReaction: userReaction ? {
           hasReacted: true,
           emoji: userReaction.emoji,
@@ -503,7 +500,6 @@ export const joinRoom = async (req: AuthRequest, res: Response) => {
           userId: req.user.id,
           color,
           isActive: true,
-          lastVisitedAt: new Date(),
         },
       });
     } else {
@@ -518,7 +514,6 @@ export const joinRoom = async (req: AuthRequest, res: Response) => {
         data: {
           isActive: true,
           leftAt: null,
-          lastVisitedAt: new Date(), // Update last visit timestamp
         },
       });
     }
@@ -945,10 +940,14 @@ export const updateRoomBackground = async (req: AuthRequest, res: Response) => {
       updateData.backgroundImageUrl = null;
       updateData.backgroundImageThumbUrl = null;
     } else if (backgroundImageUrl !== undefined || backgroundImageThumbUrl !== undefined) {
-      // Setting an image clears the color
+      // Setting an image clears the color and updates contentAddedAt (background image is content)
       updateData.backgroundColor = null;
       updateData.backgroundImageUrl = backgroundImageUrl || null;
       updateData.backgroundImageThumbUrl = backgroundImageThumbUrl || null;
+      // Update contentAddedAt when background image is added
+      if (backgroundImageUrl) {
+        updateData.contentAddedAt = new Date();
+      }
     }
 
     // Update room background
@@ -986,6 +985,38 @@ export const updateRoomBackground = async (req: AuthRequest, res: Response) => {
         backgroundImageThumbUrl: updatedRoom.backgroundImageThumbUrl,
       },
     });
+
+    // Send notifications for background image changes (non-blocking)
+    if (backgroundImageUrl && req.user) {
+      setImmediate(() => {
+        const otherParticipants = updatedRoom.participants.filter(p => p.userId !== req.user!.id);
+        otherParticipants.forEach(participant => {
+          // Push notification
+          NotificationService.notifyBackgroundChanged(
+            req.user!.firstName || req.user!.username,
+            participant.userId,
+            updatedRoom.id,
+            updatedRoom.name
+          ).catch(err => {
+            console.error('❌ Failed to send background change notification:', err);
+          });
+
+          // In-app notification
+          InAppNotificationService.createNotification({
+            userId: participant.userId,
+            type: NotificationType.BACKGROUND_CHANGED,
+            actorId: req.user!.id,
+            roomId: updatedRoom.id,
+            data: {
+              roomName: updatedRoom.name,
+              thumbnailUrl: updatedRoom.backgroundImageThumbUrl,
+            },
+          }).catch(err => {
+            console.error('❌ Failed to create in-app notification for background change:', err);
+          });
+        });
+      });
+    }
   } catch (error) {
     throw error;
   }
@@ -1380,7 +1411,7 @@ export const getMyRooms = async (req: AuthRequest, res: Response) => {
       name: string;
       created_at: Date;
       updated_at: Date;
-      object_added_at: Date;
+      content_added_at: Date | null;
       created_by: string;
       name_set_by: string | null;
       is_public: boolean;
@@ -1389,12 +1420,8 @@ export const getMyRooms = async (req: AuthRequest, res: Response) => {
       background_image_thumb_url: string | null;
       is_creator: boolean;
       element_count: bigint;
-      unread_elements: bigint;
-      unread_messages: bigint;
-      last_visited_at: Date;
       reaction_count: number;
       last_reaction_at: Date | null;
-      comments_updated_at: Date | null;
       comment_count: number;
       view_count: number;
       has_user_reacted: boolean;
@@ -1409,7 +1436,7 @@ export const getMyRooms = async (req: AuthRequest, res: Response) => {
         r.name,
         r.created_at,
         r.updated_at,
-        r.object_added_at,
+        r.content_added_at,
         r.created_by,
         r.name_set_by,
         r.is_public,
@@ -1419,13 +1446,9 @@ export const getMyRooms = async (req: AuthRequest, res: Response) => {
         r.reaction_count,
         r.last_reaction_at,
         r.comment_count,
-        r.comments_updated_at,
         r.view_count,
         (r.created_by = ${req.user.id}) as is_creator,
         COUNT(DISTINCT e.id) FILTER (WHERE e.deleted_at IS NULL) as element_count,
-        COUNT(DISTINCT e.id) FILTER (WHERE e.deleted_at IS NULL AND e.created_at > rp.last_visited_at AND e.created_by != ${req.user.id}) as unread_elements,
-        0 as unread_messages,
-        rp.last_visited_at,
         EXISTS(SELECT 1 FROM room_reactions rr WHERE rr.room_id = r.id AND rr.user_id = ${req.user.id}) as has_user_reacted,
         (SELECT emoji FROM room_reactions rr WHERE rr.room_id = r.id AND rr.user_id = ${req.user.id}) as user_reaction_emoji,
         (
@@ -1504,8 +1527,8 @@ export const getMyRooms = async (req: AuthRequest, res: Response) => {
       FROM rooms r
       JOIN room_participants rp ON rp.room_id = r.id AND rp.user_id = ${req.user.id}
       LEFT JOIN elements e ON e.room_id = r.id
-      GROUP BY r.id, r.name, r.created_at, r.updated_at, r.object_added_at, r.created_by, r.name_set_by, r.is_public, r.background_color, r.background_image_url, r.background_image_thumb_url, r.reaction_count, r.last_reaction_at, r.comments_updated_at, r.comment_count, r.sticker_element_id, rp.last_visited_at
-      ORDER BY GREATEST(r.object_added_at, COALESCE(r.comments_updated_at, r.object_added_at)) DESC
+      GROUP BY r.id, r.name, r.created_at, r.updated_at, r.content_added_at, r.created_by, r.name_set_by, r.is_public, r.background_color, r.background_image_url, r.background_image_thumb_url, r.reaction_count, r.last_reaction_at, r.comment_count, r.sticker_element_id
+      ORDER BY COALESCE(r.content_added_at, r.created_at) DESC
     `;
 
     console.log('🏠 [GET MY ROOMS] Query executed, rooms found:', roomsData.length);
@@ -1517,7 +1540,7 @@ export const getMyRooms = async (req: AuthRequest, res: Response) => {
         hasUserReacted: room.has_user_reacted,
         userEmoji: room.user_reaction_emoji,
         commentCount: room.comment_count,
-        commentsUpdatedAt: room.comments_updated_at,
+        contentAddedAt: room.content_added_at,
       });
     });
 
@@ -1542,15 +1565,12 @@ export const getMyRooms = async (req: AuthRequest, res: Response) => {
 
     // Transform the raw data into the expected format
     const roomsWithUnreadCount = roomsData.map((room, index) => {
-      const unreadCount = Number(room.unread_elements) + Number(room.unread_messages);
-      
       const roomData = {
         id: room.id,
         name: room.name,
         createdAt: room.created_at,
         updatedAt: room.updated_at,
-        messagesUpdatedAt: null, // Messages no longer exist
-        objectAddedAt: room.object_added_at,
+        contentAddedAt: room.content_added_at,
         createdBy: room.created_by,
         nameSetBy: room.name_set_by,
         isPublic: room.is_public,
@@ -1562,18 +1582,10 @@ export const getMyRooms = async (req: AuthRequest, res: Response) => {
         isCreator: room.is_creator,
         participants: room.participant_data || [],
         elementCount: Number(room.element_count),
-        unreadCount,
-        hasUnread: unreadCount > 0,
-        lastVisitedAt: room.last_visited_at,
-        badges: {
-          messages: Number(room.unread_messages),
-          elements: Number(room.unread_elements),
-        },
         // Room-level interaction data
         reactionCount: room.reaction_count,
         lastReactionAt: room.last_reaction_at,
         commentCount: room.comment_count,
-        commentsUpdatedAt: room.comments_updated_at,
         viewCount: room.view_count,
         userReaction: room.has_user_reacted ? {
           hasReacted: true,

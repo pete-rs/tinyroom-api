@@ -455,11 +455,11 @@ export const setupRoomHandlers = (io: Server, socket: SocketWithUser) => {
 
       console.log(`✅ [Room ${roomId}] Element created with ID: ${element.id}`);
 
-      // Update room's objectAddedAt timestamp when element is created
+      // Update room's contentAddedAt timestamp when element is created
       await prisma.room.update({
         where: { id: roomId },
         data: {
-          objectAddedAt: new Date(),
+          contentAddedAt: new Date(),
         },
       });
 

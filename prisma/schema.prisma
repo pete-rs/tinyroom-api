@@ -53,8 +53,7 @@ model Room {
   creator      User     @relation("RoomCreatedBy", fields: [createdBy], references: [id])
   createdAt    DateTime @default(now()) @map("created_at")
   updatedAt    DateTime @updatedAt @map("updated_at") // Track when room content is updated (elements, name, etc)
-  commentsUpdatedAt DateTime? @map("comments_updated_at") // Track when comments were last added/deleted
-  objectAddedAt DateTime @default(now()) @map("object_added_at") // Track when elements were last added
+  contentAddedAt DateTime? @map("content_added_at") // Track when content (elements or background) was added
   reactionCount Int      @default(0) @map("reaction_count")
   lastReactionAt DateTime? @map("last_reaction_at")
   commentCount  Int      @default(0) @map("comment_count") // Track total number of comments
@@ -85,7 +84,6 @@ model RoomParticipant {
   user           User      @relation(fields: [userId], references: [id])
   joinedAt       DateTime  @default(now()) @map("joined_at")
   leftAt         DateTime? @map("left_at") // Track when user left
-  lastVisitedAt  DateTime  @default(now()) @map("last_visited_at") // Track when user last visited room
   color          String    // Hex color for touch circle
   isActive       Boolean   @default(true) @map("is_active")
   
@@ -175,6 +173,7 @@ enum NotificationType {
   USER_FOLLOWED     // "{actor} started following you"
   COMMENT_LIKE      // "{actor} liked your comment: {commentPreview}"
   ROOM_LIKE         // "{actor} liked your room: {roomName}"
+  BACKGROUND_CHANGED // "{actor} changed the background in {roomName}"
 }
 
 model Comment {

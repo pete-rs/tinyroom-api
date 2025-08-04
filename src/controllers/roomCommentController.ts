@@ -298,11 +298,10 @@ export const createComment = async (req: AuthRequest, res: Response) => {
 
     console.log(`💬 [CREATE COMMENT] Created comment:`, JSON.stringify(comment, null, 2));
 
-    // Update room's comments updated timestamp and increment comment count
+    // Update room's comment count
     await prisma.room.update({
       where: { id: roomId },
       data: { 
-        commentsUpdatedAt: new Date(),
         commentCount: {
           increment: 1
         }
@@ -460,11 +459,10 @@ export const deleteComment = async (req: AuthRequest, res: Response) => {
       data: { deletedAt: new Date() },
     });
 
-    // Update room's comments updated timestamp and decrement comment count
+    // Update room's comment count
     await prisma.room.update({
       where: { id: comment.roomId },
       data: { 
-        commentsUpdatedAt: new Date(),
         commentCount: {
           decrement: 1
         }

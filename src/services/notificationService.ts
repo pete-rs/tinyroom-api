@@ -376,4 +376,25 @@ export class NotificationService {
       },
     });
   }
+
+  /**
+   * Send notification when room background is changed
+   */
+  static async notifyBackgroundChanged(
+    changerName: string,
+    recipientId: string,
+    roomId: string,
+    roomName: string
+  ): Promise<void> {
+    await this.sendToUser({
+      userId: recipientId,
+      title: 'Background Changed',
+      message: `${changerName} changed the background in ${roomName}`,
+      data: {
+        type: 'background_changed',
+        roomId,
+        roomName,
+      },
+    });
+  }
 }

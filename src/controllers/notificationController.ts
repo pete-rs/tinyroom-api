@@ -160,6 +160,13 @@ export const getNotifications = async (req: AuthRequest, res: Response) => {
         case NotificationType.ROOM_LIKE:
           displayText = `${notification.actor.firstName || notification.actor.username} liked your room: ${data.roomName || notification.room?.name || 'Unknown'}`;
           break;
+
+        case NotificationType.BACKGROUND_CHANGED:
+          displayText = `${notification.actor.firstName || notification.actor.username} changed the background in ${data.roomName || notification.room?.name || 'Unknown'}`;
+          if (data.thumbnailUrl) {
+            thumbnails = [{ url: data.thumbnailUrl, type: 'background' }];
+          }
+          break;
       }
 
       return {

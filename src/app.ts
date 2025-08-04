@@ -24,7 +24,7 @@ const app = express();
 
 // Compression middleware - compress all responses
 app.use(compression({
-  filter: (req, res) => {
+  filter: (req: Request, res: Response) => {
     // Don't compress responses with this request header
     if (req.headers['x-no-compression']) {
       return false;
